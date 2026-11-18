@@ -1,0 +1,55 @@
+name: Publish Jellyfin plugin
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jellyfin-plugin-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import reviewed initial source
+        if: github.ref == 'refs/heads/main' && hashFiles('vms-initial-source.zip') != ''
+        run: |
+          printf '%s  %s\n' ddfa58eae95de758fc9a0fe4c4de90b50228dfd80044f57385039476b1b4badc vms-initial-source.zip | sha256sum -c -
+          unzip -o vms-initial-source.zip
+          git rm vms-initial-source.zip
+          git add -- .gitignore README.md *.cs *.csproj Pages Scripts tests
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import the VMS plugin source'
+          git push origin HEAD:main
+      - name: Read target SDK
+        id: project
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from xml.etree import ElementTree
+          properties = ElementTree.parse("Jellyfin.Plugin.RemoteAdminDesk.csproj").getroot().find("PropertyGroup")
+          print("sdk=" + properties.findtext("TargetFramework").removeprefix("net") + ".x")
+          print("tag=v" + properties.findtext("AssemblyVersion"))
+          PY
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ steps.project.outputs.sdk }}
+      - name: Test plugin
+        run: |
+          node --test tests/dashboard.test.cjs
+          python3 -m unittest discover -s tests -v
+      - name: Publish versioned ZIP and Jellyfin catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT_TAG: ${{ steps.project.outputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            PROJECT_TAG="$GITHUB_REF_NAME"
+          fi
+          bash Scripts/publish-github-release.sh "$GITHUB_REPOSITORY" "$PROJECT_TAG" "$(git rev-parse HEAD)"
