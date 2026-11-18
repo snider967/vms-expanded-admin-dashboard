@@ -1,0 +1,1322 @@
+<div id="remoteAdminDesk" data-role="page" class="page type-interior pluginConfigurationPage">
+    <style>
+        #remoteAdminDesk {
+            --rad-accent: #64a7ff;
+            --rad-line: #738cb040;
+            --rad-surface: #738cb00d;
+            --rad-muted: #738cb019;
+            --rad-ok: #4eae83;
+            --rad-warn: #d9973e;
+            --rad-error: #e86a78;
+        }
+        #remoteAdminDesk .rad-wrap { max-width: 88rem; margin: auto; padding-bottom: 3rem; }
+        #remoteAdminDesk .rad-hero {
+            border: 1px solid var(--rad-line);
+            border-radius: 1.2rem;
+            padding: clamp(1.15rem, 3vw, 2rem);
+            background: linear-gradient(117deg, #408ad62c, var(--rad-surface) 75%);
+            margin: 1.25rem 0 1rem;
+        }
+        #remoteAdminDesk .rad-top, #remoteAdminDesk .rad-controls {
+            display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+        }
+        #remoteAdminDesk .rad-top { justify-content: space-between; }
+        #remoteAdminDesk .rad-hero h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.5rem); letter-spacing: -.035em; }
+        #remoteAdminDesk .rad-hero p { margin: .5em 0 0; }
+        #remoteAdminDesk .rad-muted { opacity: .78; }
+        #remoteAdminDesk .rad-metrics {
+            display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; margin-bottom: 1rem;
+        }
+        #remoteAdminDesk .rad-metric {
+            padding: .85rem 1rem;
+            border: 1px solid var(--rad-line);
+            border-radius: .8rem;
+            background: var(--rad-surface);
+        }
+        #remoteAdminDesk .rad-metric span { display: block; }
+        #remoteAdminDesk .rad-metric-value {
+            display: block; font-size: 1.55rem; line-height: 1.35; font-weight: 650;
+            font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+        }
+        #remoteAdminDesk .rad-grid { display: grid; gap: .85rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        #remoteAdminDesk .rad-card {
+            min-width: 0; padding: clamp(.95rem, 2vw, 1.25rem);
+            border: 1px solid var(--rad-line); border-radius: 1rem; background: var(--rad-surface);
+        }
+        #remoteAdminDesk .rad-card h2 { font-size: 1.15rem; margin: 0 0 .65rem; letter-spacing: -.01em; }
+        #remoteAdminDesk .rad-card p { line-height: 1.45; margin: .6rem 0; }
+        #remoteAdminDesk .rad-wide { grid-column: 1 / -1; }
+        #remoteAdminDesk .rad-data { margin: .65rem 0 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+        #remoteAdminDesk .rad-data:empty { display: none; }
+        #remoteAdminDesk .rad-data > li { border-top: 1px solid var(--rad-line); padding: .62rem 0; }
+        #remoteAdminDesk .rad-row-title, #remoteAdminDesk .rad-row-detail { display: block; }
+        #remoteAdminDesk .rad-row-title { font-weight: 600; }
+        #remoteAdminDesk .rad-row-detail { margin-top: .22rem; font-size: .88em; opacity: .78; }
+        #remoteAdminDesk .rad-report { margin-bottom: 1rem; }
+        #remoteAdminDesk .rad-tabs { display: flex; gap: .2rem; flex-wrap: wrap; border-bottom: 1px solid var(--rad-line); margin-bottom: 1rem; }
+        #remoteAdminDesk .rad-tab {
+            appearance: none; border: 0; border-bottom: 3px solid transparent;
+            padding: .72rem .8rem; color: inherit; background: transparent; font: inherit; cursor: pointer;
+        }
+        #remoteAdminDesk .rad-tab[aria-selected="true"] { border-bottom-color: var(--rad-accent); font-weight: 650; }
+        #remoteAdminDesk .rad-tab:hover, #remoteAdminDesk .rad-tab:focus-visible { background: var(--rad-muted); }
+        #remoteAdminDesk .rad-chart { margin: .9rem 0 0; }
+        #remoteAdminDesk .rad-chart figcaption { font-weight: 600; margin-bottom: .45rem; }
+        #remoteAdminDesk .rad-chart-row {
+            display: grid; grid-template-columns: minmax(5.5rem, 1fr) 1.5fr max-content;
+            align-items: center; gap: .55rem; padding: .23rem 0; font-size: .88em;
+        }
+        #remoteAdminDesk .rad-chart-label { overflow-wrap: anywhere; }
+        #remoteAdminDesk .rad-chart-rail { height: .45rem; border-radius: 1rem; background: var(--rad-muted); }
+        #remoteAdminDesk .rad-chart-fill { display: block; height: 100%; border-radius: inherit; background: var(--rad-accent); }
+        #remoteAdminDesk .rad-chart-fill[data-tone="warning"] { background: var(--rad-warn); }
+        #remoteAdminDesk .rad-chart-fill[data-tone="critical"] { background: var(--rad-error); }
+        #remoteAdminDesk .rad-chart-value { font-variant-numeric: tabular-nums; }
+        #remoteAdminDesk .rad-donut-layout { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        #remoteAdminDesk .rad-donut { width: 6rem; aspect-ratio: 1; border-radius: 50%; flex: 0 0 auto; }
+        #remoteAdminDesk .rad-donut-legend { flex: 1 1 9rem; margin: 0; padding: 0; list-style: none; }
+        #remoteAdminDesk .rad-donut-legend li { padding: .24rem 0; }
+        #remoteAdminDesk .rad-swatch { display: inline-block; width: .62rem; height: .62rem; border-radius: 50%; margin-inline-end: .4rem; }
+        #remoteAdminDesk .rad-field { display: grid; gap: .35rem; margin: .8rem 0; }
+        #remoteAdminDesk .rad-field input[type="password"], #remoteAdminDesk .rad-field input[type="text"] {
+            box-sizing: border-box; width: 100%; border: 1px solid var(--rad-line); border-radius: .45rem;
+            padding: .55rem; color: inherit; background: var(--rad-muted);
+        }
+        #remoteAdminDesk .rad-field small { opacity: .82; }
+        #remoteAdminDesk textarea, #remoteAdminDesk select {
+            box-sizing: border-box; max-width: 100%; border: 1px solid var(--rad-line);
+            border-radius: .45rem; padding: .45rem; background: var(--rad-muted); color: inherit;
+        }
+        #remoteAdminDesk textarea {
+            display: block; width: 100%; margin: .7rem 0; font-family: ui-monospace, monospace; resize: vertical;
+        }
+        #remoteAdminDesk select option { color: CanvasText; background: Canvas; }
+        #remoteAdminDesk pre {
+            overflow: auto; white-space: pre-wrap; max-height: 24rem; overflow-wrap: anywhere;
+            padding: .7rem; border-radius: .45rem; background: var(--rad-muted); line-height: 1.4;
+        }
+        #remoteAdminDesk summary { cursor: pointer; padding: .4rem 0; }
+        #remoteAdminDesk .rad-severity {
+            display: inline-block; border-inline-start: 3px solid var(--rad-accent); padding-inline: .45rem;
+            margin-inline-end: .35rem; font-size: .84em; font-weight: 650;
+        }
+        #remoteAdminDesk .rad-severity[data-level="critical"], #remoteAdminDesk .rad-severity[data-level="high"] { border-color: var(--rad-error); }
+        #remoteAdminDesk .rad-severity[data-level="warning"] { border-color: var(--rad-warn); }
+        #remoteAdminDesk meter { width: 100%; height: 1.05rem; display: block; margin: .45rem 0; accent-color: var(--rad-ok); }
+        #remoteAdminDesk [hidden] { display: none !important; }
+        @media (max-width: 760px) {
+            #remoteAdminDesk .rad-grid { grid-template-columns: minmax(0, 1fr); }
+            #remoteAdminDesk .rad-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+    </style>
+    <div data-role="content" class="content-primary rad-wrap">
+        <header class="rad-hero">
+            <div class="rad-top">
+                <h1>VMS Expanded Admin Dashboard</h1>
+                <div class="rad-controls">
+                    <button is="emby-button" type="button" class="raised" data-desk="refresh" hidden>Refresh overview</button>
+                    <button is="emby-button" type="button" class="raised" data-desk="snapshot" hidden>Create shareable snapshot</button>
+                </div>
+            </div>
+            <p class="rad-muted" data-desk="server" hidden></p>
+            <p role="status" aria-live="polite" data-desk="status">Checking administrator access…</p>
+        </header>
+        <div data-desk="panels" hidden>
+            <section class="rad-card rad-report" data-desk="report-panel" hidden>
+                <h2>Shareable snapshot</h2>
+                <textarea data-desk="export" aria-label="Shareable diagnostics snapshot" rows="8" readonly></textarea>
+                <button is="emby-button" type="button" class="raised" data-desk="copy">Copy snapshot</button>
+                <p role="status" data-desk="copy-status"></p>
+            </section>
+            <div class="rad-tabs" role="tablist" aria-label="Diagnostics">
+                <button type="button" class="rad-tab" id="rad-tab-overview" role="tab" aria-controls="rad-panel-overview" aria-selected="true" data-rad-tab="overview">Overview</button>
+                <button type="button" class="rad-tab" id="rad-tab-media" role="tab" aria-controls="rad-panel-media" aria-selected="false" tabindex="-1" data-rad-tab="media">Media &amp; usage</button>
+                <button type="button" class="rad-tab" id="rad-tab-logs" role="tab" aria-controls="rad-panel-logs" aria-selected="false" tabindex="-1" data-rad-tab="logs">Logs</button>
+                <button type="button" class="rad-tab" id="rad-tab-imports" role="tab" aria-controls="rad-panel-imports" aria-selected="false" tabindex="-1" data-rad-tab="imports">Imports</button>
+                <button type="button" class="rad-tab" id="rad-tab-notifications" role="tab" aria-controls="rad-panel-notifications" aria-selected="false" tabindex="-1" data-rad-tab="notifications">Notifications</button>
+                <button type="button" class="rad-tab" id="rad-tab-settings" role="tab" aria-controls="rad-panel-settings" aria-selected="false" tabindex="-1" data-rad-tab="settings">Settings</button>
+            </div>
+            <div id="rad-panel-overview" role="tabpanel" aria-labelledby="rad-tab-overview" tabindex="0" data-rad-panel="overview">
+            <div class="rad-metrics" aria-label="Overview totals">
+                <div class="rad-metric"><strong class="rad-metric-value" data-desk="active-total">—</strong><span>Active streams</span></div>
+                <div class="rad-metric"><strong class="rad-metric-value" data-desk="transcode-total">—</strong><span>Transcoding</span></div>
+                <div class="rad-metric"><strong class="rad-metric-value" data-desk="task-total">—</strong><span>Failed tasks</span></div>
+                <div class="rad-metric"><strong class="rad-metric-value" data-desk="space-total">—</strong><span>Lowest free space</span></div>
+            </div>
+            <div class="rad-grid">
+                <section class="rad-card">
+                    <h2>Active playback</h2><p class="rad-muted" data-desk="playback"></p><div data-desk="stream-chart"></div><ul class="rad-data" data-desk="sessions"></ul>
+                </section>
+                <section class="rad-card">
+                    <h2>Scheduled tasks</h2><p class="rad-muted" data-desk="task-summary"></p><ul class="rad-data" data-desk="tasks"></ul>
+                </section>
+                <section class="rad-card rad-wide">
+                    <h2>Historical activity</h2>
+                    <div class="rad-controls">
+                        <label>History window <select data-desk="overview-window"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+                        <button is="emby-button" type="button" class="raised" data-desk="read-history">Load activity history</button>
+                    </div>
+                    <p class="rad-muted" data-desk="overview-history-status" role="status">View successful logins, connected sessions, and stream starts from recorded Jellyfin activity.</p>
+                    <div class="rad-grid" data-desk="overview-history-charts"></div>
+                </section>
+                <section class="rad-card rad-wide">
+                    <div class="rad-top"><h2>Playback troubleshooting</h2><button is="emby-button" type="button" class="raised" data-desk="read-triage">Check recent transcodes</button></div>
+                    <p class="rad-muted" data-desk="triage-status" role="status">Compare recent FFmpeg evidence with the current streams above.</p>
+                    <ul class="rad-data" data-desk="triage-logs"></ul>
+                </section>
+            </div>
+            </div>
+            <div class="rad-grid" id="rad-panel-media" role="tabpanel" aria-labelledby="rad-tab-media" tabindex="0" data-rad-panel="media" hidden>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Media storage and runway</h2><button is="emby-button" type="button" class="raised" data-desk="read-storage">Check free space</button></div>
+                    <p class="rad-muted" data-desk="storage">Capture current free space and view previous samples.</p>
+                    <ul class="rad-data" data-desk="volumes"></ul>
+                    <details data-desk="mount-detail" hidden><summary>Library paths and history</summary><ul class="rad-data" data-desk="mounts"></ul><ul class="rad-data" data-desk="history"></ul></details>
+                </section>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Media branch health</h2><button is="emby-button" type="button" class="raised" data-desk="read-branches">Check expected mounts</button></div>
+                    <p class="rad-muted" data-desk="branch-status" role="status">Check free space and detect missing configured branch mounts.</p>
+                    <div data-desk="branch-chart"></div>
+                    <ul class="rad-data" data-desk="branch-list"></ul>
+                </section>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Recent media and codecs</h2><button is="emby-button" type="button" class="raised" data-desk="read-additions">Check library additions</button></div>
+                    <p class="rad-muted" data-desk="additions">Movies and episodes indexed by Jellyfin.</p>
+                    <div data-desk="codecs"></div><div data-desk="arrival-chart"></div><ul class="rad-data" data-desk="recent"></ul>
+                </section>
+                <section class="rad-card rad-wide">
+                    <h2>Usage and popular media</h2>
+                    <div class="rad-controls">
+                        <label>History window <select data-desk="window"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+                        <button is="emby-button" type="button" class="raised" data-desk="read-usage">Check playback history</button>
+                    </div>
+                    <p class="rad-muted" data-desk="usage"></p>
+                    <div class="rad-grid" data-desk="usage-charts"></div>
+                    <details data-desk="usage-users" open hidden><summary>Per-user playback events</summary><ul class="rad-data" data-desk="users"></ul></details>
+                    <details data-desk="usage-popular" open hidden><summary>Most-played titles</summary><ol class="rad-data" data-desk="popular"></ol></details>
+                </section>
+            </div>
+            <div id="rad-panel-logs" role="tabpanel" aria-labelledby="rad-tab-logs" tabindex="0" data-rad-panel="logs" hidden>
+                <section class="rad-card">
+                    <h2>Log findings</h2>
+                    <div class="rad-controls">
+                        <button is="emby-button" type="button" class="raised" data-desk="read-logs">List recent logs</button>
+                        <label data-desk="picker" hidden>Log file <select data-desk="logs"></select></label>
+                        <button is="emby-button" type="button" class="raised" data-desk="read-tail" hidden>Analyze log tail</button>
+                    </div>
+                    <p class="rad-muted" data-desk="log-status">Check Jellyfin server and FFmpeg logs for recurring errors.</p>
+                    <div data-desk="log-chart"></div>
+                    <ul class="rad-data" data-desk="findings"></ul>
+                    <details data-desk="raw" hidden><summary>Show private log excerpt</summary><pre data-desk="excerpt"></pre></details>
+                </section>
+            </div>
+            <div id="rad-panel-imports" role="tabpanel" aria-labelledby="rad-tab-imports" tabindex="0" data-rad-panel="imports" hidden>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Sonarr and Radarr queues</h2><button is="emby-button" type="button" class="raised" data-desk="read-imports">Check import queues</button></div>
+                    <p class="rad-muted" data-desk="import-status" role="status">Check current downloads and the reasons reported for import warnings or failures.</p>
+                    <div data-desk="import-chart"></div>
+                    <ul class="rad-data" data-desk="import-list"></ul>
+                </section>
+            </div>
+            <div id="rad-panel-notifications" role="tabpanel" aria-labelledby="rad-tab-notifications" tabindex="0" data-rad-panel="notifications" hidden>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Discord delivery</h2><button is="emby-button" type="button" class="raised" data-desk="read-notifications">Check notification status</button></div>
+                    <p class="rad-muted" data-desk="notification-status" role="status">View webhook readiness, last delivery, and pending media alerts.</p>
+                    <ul class="rad-data" data-desk="notification-channels"></ul>
+                    <p class="rad-muted">Configure channels in Settings. Delivery intervals are managed in Jellyfin Scheduled Tasks.</p>
+                </section>
+            </div>
+            <div id="rad-panel-settings" role="tabpanel" aria-labelledby="rad-tab-settings" tabindex="0" data-rad-panel="settings" hidden>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Plugin settings</h2><button is="emby-button" type="button" class="raised" data-desk="read-settings">Load settings</button></div>
+                    <p role="status" class="rad-muted" data-desk="settings-status">Load settings to manage integrations.</p>
+                    <form data-desk="settings-form" autocomplete="off" hidden>
+                        <p>Leave a credential blank to keep its current value. Values set by the service environment take precedence.</p>
+                        <div class="rad-grid">
+                            <div>
+                                <h3>Discord</h3>
+                        <div class="rad-field">
+                            <label for="rad-settings-diagnostics">Diagnostics webhook</label>
+                            <input id="rad-settings-diagnostics" type="password" data-desk="settings-diagnostics" maxlength="512" autocomplete="new-password" disabled>
+                            <small data-desk="settings-diagnostics-status">Optional. Sends storage and server alerts.</small>
+                            <label><input type="checkbox" data-desk="settings-diagnostics-clear" disabled> Remove saved value</label>
+                        </div>
+                        <div class="rad-field">
+                            <label for="rad-settings-media">New movies and TV webhook</label>
+                            <input id="rad-settings-media" type="password" data-desk="settings-media" maxlength="512" autocomplete="new-password" disabled>
+                            <small data-desk="settings-media-status">Optional. Sends alerts after Jellyfin indexes new media.</small>
+                            <label><input type="checkbox" data-desk="settings-media-clear" disabled> Remove saved value</label>
+                        </div>
+                            </div>
+                            <div>
+                                <h3>Sonarr and Radarr</h3>
+                        <div class="rad-field">
+                            <label for="rad-settings-sonarr">Sonarr API key</label>
+                            <input id="rad-settings-sonarr" type="password" data-desk="settings-sonarr" maxlength="512" autocomplete="new-password" disabled>
+                            <small data-desk="settings-sonarr-status">Optional. Reads the queue at 127.0.0.1:8989.</small>
+                            <label><input type="checkbox" data-desk="settings-sonarr-clear" disabled> Remove saved value</label>
+                        </div>
+                        <div class="rad-field">
+                            <label for="rad-settings-radarr">Radarr API key</label>
+                            <input id="rad-settings-radarr" type="password" data-desk="settings-radarr" maxlength="512" autocomplete="new-password" disabled>
+                            <small data-desk="settings-radarr-status">Optional. Reads the queue at 127.0.0.1:7878.</small>
+                            <label><input type="checkbox" data-desk="settings-radarr-clear" disabled> Remove saved value</label>
+                        </div>
+                            </div>
+                        </div>
+                        <div class="rad-field">
+                            <label for="rad-settings-branches">Expected mount points</label>
+                            <input id="rad-settings-branches" type="text" data-desk="settings-branches" maxlength="4096" disabled
+                                placeholder="/mnt/media5tb:/mnt/media10tb">
+                            <small data-desk="settings-branches-status">Separate up to eight exact Linux mount points with colons.</small>
+                        </div>
+                        <button is="emby-button" type="submit" class="raised" data-desk="save-settings" disabled>Save settings</button>
+                    </form>
+                    <details>
+                        <summary>Outage alerts and schedules</summary>
+                        <p>Configure outage alerts on the external monitor with <code>RAD_HEALTH_URL</code> and <code>RAD_UPTIME_DISCORD_WEBHOOK</code>. Choose when Jellyfin jobs run in Scheduled Tasks.</p>
+                    </details>
+                </section>
+            </div>
+        </div>
+    </div>
+    <script>
+    (() => {
+const DeskAnalysis = (() => {
+    "use strict";
+
+    const day = 86_400_000;
+    const gib = 1024 ** 3;
+    const windows = [7, 30, 90];
+    const rules = [
+        ["Storage full or quota exceeded", "critical", /no space left on device|enospc|disk quota exceeded|database or disk is full/i, "Check media, cache, metadata and transcode volumes."],
+        ["I/O or mount failure", "critical", /input\/output error|stale file handle|transport endpoint is not connected|read.only file system|device or resource busy/i, "Check host disk and mount health. Look for matching kernel or storage logs."],
+        ["SQLite corruption or database failure", "critical", /database disk image is malformed|sqlite_corrupt|sqlite_ioerr|disk i\/o error|database corruption/i, "Check database and host storage health before attempting repairs."],
+        ["Process memory exhaustion", "critical", /outofmemoryexception|out of memory|cannot allocate memory/i, "Check host RAM, swap, and concurrent transcoding activity."],
+        ["Permission or ownership issue", "high", /unauthorizedaccessexception|unauthorized access to (?:file|path)|permission denied|access to the path .{0,240} is denied|\beacces\b/i, "Check the affected path and Jellyfin service-account access."],
+        ["Hardware acceleration failure", "high", /failed to initiali[sz]e (?:vaapi|qsv|cuda|d3d11va|vulkan|device)|no va display|no device available for decoder|failed to (?:open|create) .{0,80}(?:vaapi|qsv|cuda|d3d11va|vulkan|hwdevice)|device creation failed|failed to set value .{0,100}hwaccel|failed setup for format (?:vaapi|qsv|cuda)/i, "Compare the FFmpeg log with the configured acceleration method, device and driver."],
+        ["FFmpeg or encoder failure", "high", /ffmpeg (?:exited with code [1-9]|failed|exception)|ffmpegexception|error initializing output stream|error while opening encoder|conversion failed|unknown encoder/i, "Open the corresponding FFmpeg log and compare with active transcode details."],
+        ["Database lock or timeout", "high", /database (?:table )?is locked|sqlite_busy|database.*(?:lock timeout|timed out)/i, "Check which jobs overlapped around the first matching line."],
+        ["Missing file or invalid input", "high", /filenotfoundexception|directorynotfoundexception|no such file or directory|invalid data found when processing input|moov atom not found/i, "Check the affected mount and whether the file still exists at the indexed path."],
+        ["Scheduled task failure", "high", /(?:scheduled task|error executing scheduled task).{0,120}(?:fail|error|exception)|error executing scheduled task/i, "Compare with the failed task's last execution in the dashboard."],
+        ["Library scan or refresh error", "high", /error (?:refreshing|scanning|validating) (?:items?|library|media)|error in librarymonitor|failed to scan|error in directory watcher/i, "Check affected paths and the latest library-scan outcome."],
+        ["Network, DNS or upstream timeout", "warning", /connection refused|name or service not known|temporary failure in name resolution|no such host is known|socketexception|connection reset|network is unreachable|http request.{0,100}timed out|gateway timeout/i, "Compare the destination with metadata providers, plugins, or reverse-proxy logs."],
+        ["TLS or certificate error", "warning", /certificate (?:verify failed|has expired|chain errors|is invalid)|ssl connection could not be established|remote certificate is invalid|authentication failed because the remote party/i, "Check the certificate chain, hostname and system time."],
+        ["Plugin loading or dependency failure", "warning", /failed to load plugin|error loading plugin|could not load (?:file or )?assembly|typeloadexception|missingmethodexception|reflectiontypeloadexception/i, "Check the named plugin's server ABI and dependency versions."],
+        ["Subtitle extraction or burn-in error", "warning", /(?:subtitle extraction|subtitle filter|ass filter).{0,100}(?:fail|error)|error (?:extracting|encoding|converting) subtitles/i, "Compare subtitle format, playback client and FFmpeg transcode reasons."],
+        ["Frequent client cancellations or disconnects", "info", /operationcanceledexception|taskcanceledexception|request was aborted|broken pipe|client disconnected/i, "Check frequency and timing. Individual cancellations often occur when a client closes playback."]
+    ];
+
+    function analyze(content, maxLines = 2400) {
+        const lines = content.split(/\r?\n/);
+        const offset = Math.max(0, lines.length - maxLines);
+        const findings = new Map();
+        const levels = { fatal: 0, error: 0, warning: 0, other: 0 };
+        for (let i = offset; i < lines.length; i++) {
+            const line = lines[i].slice(0, 1600);
+            if (!line.trim()) continue;
+            const severity = line.match(/^(?:\[[^\]]{1,100}\]\s*){0,2}\[(FTL|ERR|WRN|Fatal|Error|Warning)\]/i)?.[1]?.toLowerCase();
+            const level = /^(ftl|fatal)$/.test(severity) ? "fatal"
+                : /^(err|error)$/.test(severity) ? "error"
+                : /^(wrn|warning)$/.test(severity) ? "warning" : "other";
+            levels[level]++;
+            let matched = false;
+            for (const rule of rules) {
+                if (!rule[2].test(line)) continue;
+                matched = true;
+                add(rule[0], rule[1], rule[3], i, line);
+            }
+            if (!matched && (level === "error" || level === "fatal" || level === "warning")) {
+                add("Other " + level + " entries", level === "fatal" ? "critical" : level === "error" ? "high" : "warning",
+                    "Review the matching lines in context.", i, line);
+            }
+        }
+        function add(title, severity, next, i, line) {
+            const finding = findings.get(title) || { title, severity, next, count: 0, examples: [] };
+            finding.count++;
+            finding.examples.push({ line: i + 1, text: line.slice(0, 650) });
+            if (finding.examples.length > 3) finding.examples.shift();
+            findings.set(title, finding);
+        }
+        const order = { critical: 0, high: 1, warning: 2, info: 3 };
+        return {
+            findings: Array.from(findings.values()).sort((a, b) => order[a.severity] - order[b.severity] || b.count - a.count),
+            levels, lines: lines.length - offset, offset
+        };
+    }
+
+    function recordStorage(history, reading) {
+        const timestamp = Date.parse(reading.sampledAt);
+        if (!Number.isFinite(timestamp)) return history;
+        const bucket = new Date(timestamp).toISOString().slice(0, 10);
+        const next = history.filter(sample => sample.bucket !== bucket);
+        const existing = history.find(sample => sample.bucket === bucket);
+        if (existing?.timestamp >= timestamp) return history;
+        const fresh = reading.volumes.filter(volume => Number.isFinite(volume.total) && Number.isFinite(volume.available));
+        if (!fresh.length) return history;
+        next.push({ bucket, timestamp, volumes: fresh.map(({ mount, fileSystem, device, total, available }) =>
+            ({ mount, fileSystem, device, total, available })) });
+        return next.sort((a, b) => a.timestamp - b.timestamp).slice(-120);
+    }
+
+    function forecast(history, volume) {
+        const series = [];
+        let reset = false;
+        for (const row of history) {
+            const sample = row.volumes.find(value => value.mount === volume.mount);
+            if (!sample) continue;
+            const previous = series.at(-1);
+            if (sample.fileSystem !== volume.fileSystem || sample.device !== volume.device || sample.total !== volume.total) {
+                series.length = 0;
+                reset = true;
+                continue;
+            }
+            if (previous && sample.available - previous.available > Math.max(10 * gib, sample.total * 0.02)) {
+                series.length = 0;
+                reset = true;
+            }
+            series.push({ timestamp: row.timestamp, available: sample.available });
+        }
+        const reserve = Math.min(0.15 * volume.total, Math.max(30 * gib, 0.1 * volume.total));
+        const results = [];
+        const latest = series.at(-1);
+        if (latest) {
+            for (const window of windows) {
+                const observations = series.filter(point => latest.timestamp - point.timestamp <= window * day);
+                if (observations.length < 3) continue;
+                const first = observations[0];
+                const span = (latest.timestamp - first.timestamp) / day;
+                if (span < (window === 7 ? 4 : window === 30 ? 12 : 30)) continue;
+                const rate = (first.available - latest.available) / span;
+                results.push({ window, samples: observations.length, span, rate,
+                    days: volume.available <= reserve ? 0 : rate > 0 ? (volume.available - reserve) / rate : null });
+            }
+        }
+        return { reserve, series, reset, results };
+    }
+
+    function playbackSummary(entries, users) {
+        const perUser = new Map();
+        const names = new Map(users.map(user => [user.Id, user.Name]));
+        const titles = new Map();
+        let starts = 0;
+        let stops = 0;
+        let logins = 0;
+        let sessions = 0;
+        const events = [];
+        for (const entry of entries) {
+            const start = /^(video|audio|game)playback$/i.test(entry.Type || "");
+            const stop = /^(video|audio|game)playbackstopped$/i.test(entry.Type || "");
+            const login = entry.Type === "AuthenticationSucceeded";
+            const session = entry.Type === "SessionStarted";
+            if (!start && !stop && !login && !session) continue;
+            if (start) starts++;
+            if (stop) stops++;
+            if (login) logins++;
+            if (session) sessions++;
+            const time = Date.parse(entry.Date);
+            if (Number.isFinite(time) && !stop) events.push({ time, kind: login ? "logins" : session ? "sessions" : "starts" });
+            if (entry.UserId && !/^0+$/.test(entry.UserId.replace(/-/g, ""))) {
+                const row = perUser.get(entry.UserId) || {
+                    name: names.get(entry.UserId) || "Unknown user", starts: 0, stops: 0, logins: 0, sessions: 0, latest: ""
+                };
+                if (start) row.starts++;
+                if (stop) row.stops++;
+                if (login) row.logins++;
+                if (session) row.sessions++;
+                if (Date.parse(entry.Date) > (Date.parse(row.latest) || 0)) row.latest = entry.Date;
+                perUser.set(entry.UserId, row);
+            }
+            if (!start) continue;
+            const title = entry.Name?.match(/\bis playing (.+?) on .+$/i)?.[1]
+                || entry.Name?.match(/\bstarted playing (.+?) on .+$/i)?.[1];
+            if (!entry.ItemId && !title) continue;
+            const key = entry.ItemId || "title:" + title;
+            const row = titles.get(key) || { id: entry.ItemId, name: null, starts: 0, viewers: new Set() };
+            if (title) row.name = title;
+            row.starts++;
+            if (entry.UserId && perUser.has(entry.UserId)) row.viewers.add(entry.UserId);
+            titles.set(key, row);
+        }
+        return {
+            starts, stops, logins, sessions, events,
+            users: Array.from(perUser.values()).sort((a, b) => b.starts - a.starts || b.logins - a.logins || b.sessions - a.sessions),
+            titles: Array.from(titles.values()).sort((a, b) => b.starts - a.starts)
+        };
+    }
+
+    function additions(items) {
+        return items.map(item => {
+            const sources = (item.MediaSources || []).filter(source => source.Path && !source.IsRemote);
+            const local = sources.every(source => source.Protocol === "File" || source.Protocol == null);
+            const complete = sources.length > 0 && local && sources.every(source => Number.isFinite(source.Size) && source.Size > 0);
+            return { name: [item.SeriesName, item.Name].filter(Boolean).join(" · "), date: item.DateCreated, type: item.Type,
+                sources, size: complete ? sources.reduce((sum, source) => sum + source.Size, 0) : null };
+        });
+    }
+
+    function arrivalRates(rows, reading, resultsLimited, now = Date.now()) {
+        const boundary = now - 30 * day;
+        const rates = new Map();
+        if (resultsLimited && !(Date.parse(rows.at(-1)?.date) <= boundary)) return rates;
+        if (reading.limited || reading.locations.some(location => !location.mount)) return rates;
+        const locations = reading.locations.map(location => ({
+            ...location, prefix: location.path.replace(/\/$/, "") + "/"
+        })).sort((a, b) => b.path.length - a.path.length);
+        const mounts = new Map();
+        for (const row of rows) {
+            const date = Date.parse(row.date);
+            if (!Number.isFinite(date) || date > now) return rates;
+            if (date < boundary) continue;
+            if (!row.sources.length || row.size === null) return rates;
+            const touched = new Set();
+            for (const source of row.sources) {
+                const location = locations.find(entry => source.Path === entry.path || source.Path.startsWith(entry.prefix));
+                if (!location) return rates;
+                const mount = mounts.get(location.mount) || { arrivals: 0, paths: new Map() };
+                mounts.set(location.mount, mount);
+                // The same path can occur in more than one item.
+                mount.paths.set(source.Path, source.Size);
+                touched.add(mount);
+            }
+            for (const mount of touched) mount.arrivals++;
+        }
+        for (const [key, mount] of mounts) {
+            if (mount.arrivals < 3) continue;
+            let bytes = 0;
+            for (const size of mount.paths.values()) bytes += size;
+            rates.set(key, { arrivals: mount.arrivals, rate: bytes / 30 });
+        }
+        return rates;
+    }
+
+    function codecCounts(rows) {
+        const codecs = new Map();
+        for (const item of rows) {
+            const formats = new Set();
+            for (const source of item.sources) {
+                for (const stream of source.MediaStreams || []) {
+                    if (stream.Type === "Video" && stream.Codec) formats.add(stream.Codec.toLowerCase());
+                }
+            }
+            for (const format of formats) codecs.set(format, (codecs.get(format) || 0) + 1);
+        }
+        return codecs;
+    }
+
+    function recentDayCounts(rows, now = Date.now()) {
+        // Calendar buckets use the browser date so chart labels and recent-item timestamps agree.
+        const days = new Map();
+        const reference = new Date(now);
+        for (let offset = 6; offset >= 0; offset--) {
+            const date = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate() - offset);
+            const key = date.toDateString();
+            days.set(key, { label: date.toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: 0 });
+        }
+        for (const row of rows) {
+            const date = Date.parse(row.date);
+            if (!Number.isFinite(date) || date > now) continue;
+            const bucket = days.get(new Date(date).toDateString());
+            if (bucket) bucket.value++;
+        }
+        return [...days.values()];
+    }
+
+    function activityBuckets(events, days, now = Date.now()) {
+        const width = day * Math.ceil(days / 10);
+        const first = now - day * days;
+        const buckets = Array.from({ length: Math.ceil(days * day / width) }, (_, i) => ({
+            label: new Date(first + i * width).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+            logins: 0, sessions: 0, starts: 0
+        }));
+        for (const event of events) {
+            if (event.time < first || event.time > now) continue;
+            const index = Math.min(buckets.length - 1, Math.floor((event.time - first) / width));
+            buckets[index][event.kind]++;
+        }
+        return buckets;
+    }
+
+    function matchesVersion(running, target) {
+        if (typeof running !== "string" || typeof target !== "string") return false;
+        const valid = /^\d+(?:\.\d+){1,3}$/;
+        return valid.test(running) && valid.test(target)
+            && running.replace(/(?:\.0)+$/, "") === target.replace(/(?:\.0)+$/, "");
+    }
+
+    return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts, activityBuckets, matchesVersion };
+})();
+
+        const page = document.getElementById("remoteAdminDesk");
+        const field = name => page.querySelector('[data-desk="' + name + '"]');
+        const status = (fieldName, message) => { field(fieldName).textContent = message; };
+        const formatDate = value => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "unknown";
+        const bytes = value => Number.isFinite(value)
+            ? value >= 1024 ** 4 ? (value / 1024 ** 4).toFixed(2) + " TiB" : (value / 1024 ** 3).toFixed(1) + " GiB"
+            : "size unavailable";
+        const tabs = [...page.querySelectorAll("[data-rad-tab]")];
+        const tabPanels = [...page.querySelectorAll("[data-rad-panel]")];
+        let signal, pageRequest, busy, historyKey, activeClient, storage, history, historyChecked,
+            arrivals, arrivalLimit, report, knownUsers;
+        function selectTab(selected, focus = false) {
+            for (const tab of tabs) {
+                const active = tab === selected;
+                tab.setAttribute("aria-selected", String(active));
+                tab.tabIndex = active ? 0 : -1;
+            }
+            for (const panel of tabPanels) panel.hidden = panel.dataset.radPanel !== selected.dataset.radTab;
+            if (focus) selected.focus();
+        }
+        for (const [index, tab] of tabs.entries()) {
+            tab.addEventListener("click", () => selectTab(tab));
+            tab.addEventListener("keydown", event => {
+                const destination = {
+                    ArrowLeft: (index + tabs.length - 1) % tabs.length,
+                    ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1
+                }[event.key];
+                if (destination === undefined) return;
+                event.preventDefault();
+                selectTab(tabs[destination], true);
+            });
+        }
+        const actionButtons = ["refresh", "read-storage", "read-additions", "read-usage", "read-logs", "read-tail",
+            "read-notifications", "read-imports", "read-branches", "read-triage", "read-history", "read-settings"];
+        const secretFields = [
+            ["settings-diagnostics", "diagnosticsWebhook"], ["settings-media", "mediaWebhook"],
+            ["settings-sonarr", "sonarrKey"], ["settings-radarr", "radarrKey"]
+        ];
+        let savedSettings;
+        function forgetSettings() {
+            for (const [name] of secretFields) {
+                field(name).value = "";
+                field(name + "-clear").checked = false;
+            }
+        }
+
+        function newReport() {
+            return { generatedAt: new Date().toISOString() };
+        }
+
+        function setList(name, rows) {
+            const list = field(name);
+            const items = document.createDocumentFragment();
+            for (const row of rows) {
+                const item = document.createElement("li");
+                item.append(row);
+                items.append(item);
+            }
+            list.replaceChildren(items);
+        }
+
+        function row(title, detail) {
+            const fragment = document.createDocumentFragment();
+            const heading = document.createElement("span");
+            heading.className = "rad-row-title";
+            heading.textContent = title;
+            fragment.append(heading);
+            if (detail) {
+                const note = document.createElement("span");
+                note.className = "rad-row-detail";
+                note.textContent = detail;
+                fragment.append(note);
+            }
+            return fragment;
+        }
+
+        function chart(title, data, maximum = Math.max(1, ...data.map(point => point.value))) {
+            const figure = document.createElement("figure");
+            figure.className = "rad-chart";
+            const heading = document.createElement("figcaption");
+            heading.textContent = title;
+            figure.append(heading);
+            for (const point of data) {
+                const item = document.createElement("div");
+                item.className = "rad-chart-row";
+                const label = document.createElement("span");
+                label.className = "rad-chart-label";
+                label.textContent = point.label;
+                const rail = document.createElement("span");
+                rail.className = "rad-chart-rail";
+                rail.setAttribute("aria-hidden", "true");
+                const fill = document.createElement("span");
+                fill.className = "rad-chart-fill";
+                fill.style.width = Math.max(0, Math.min(100, 100 * point.value / maximum)) + "%";
+                if (point.tone) fill.dataset.tone = point.tone;
+                rail.append(fill);
+                const value = document.createElement("span");
+                value.className = "rad-chart-value";
+                value.textContent = point.detail ?? point.value;
+                item.append(label, rail, value);
+                figure.append(item);
+            }
+            return figure;
+        }
+
+        function donut(title, data) {
+            const figure = document.createElement("figure");
+            figure.className = "rad-chart";
+            const caption = document.createElement("figcaption");
+            caption.textContent = title;
+            const body = document.createElement("div");
+            body.className = "rad-donut-layout";
+            const wheel = document.createElement("div");
+            wheel.className = "rad-donut";
+            wheel.setAttribute("aria-hidden", "true");
+            const legend = document.createElement("ul");
+            legend.className = "rad-donut-legend";
+            const colors = ["#64a7ff", "#4eae83", "#d9973e"];
+            const total = data.reduce((sum, row) => sum + row.value, 0);
+            let cursor = 0;
+            const sections = [];
+            for (const [index, point] of data.entries()) {
+                const color = colors[index % colors.length];
+                const entry = document.createElement("li");
+                const swatch = document.createElement("span");
+                swatch.className = "rad-swatch";
+                swatch.style.background = color;
+                swatch.setAttribute("aria-hidden", "true");
+                entry.append(swatch, point.label + " · " + point.value);
+                legend.append(entry);
+                if (total && point.value) {
+                    const end = cursor + point.value * 100 / total;
+                    sections.push(color + " " + cursor + "% " + end + "%");
+                    cursor = end;
+                }
+            }
+            if (sections.length) {
+                wheel.style.background = "conic-gradient(" + sections.join(",") + ")";
+                wheel.style.maskImage = "radial-gradient(circle, transparent 44%, black 46%)";
+                body.append(wheel);
+            }
+            body.append(legend);
+            figure.append(caption, body);
+            return figure;
+        }
+
+        async function read(path, params, max = 1024 * 1024, bodyData) {
+            const navigation = signal;
+            const requestSignal = AbortSignal.any([navigation, AbortSignal.timeout(7500)]);
+            const client = activeClient;
+            const token = client?.accessToken?.();
+            if (!token) throw new Error("Authentication required.");
+            const url = new URL(client.getUrl(path, params), window.location.href);
+            if (url.origin !== window.location.origin) throw new Error("Use this server's own Jellyfin Web client.");
+            const headers = { "Authorization": "MediaBrowser Token=" + JSON.stringify(token), "Accept": "application/json" };
+            if (bodyData !== undefined) headers["Content-Type"] = "application/json";
+            const response = await fetch(url, {
+                method: bodyData === undefined ? "GET" : "PUT",
+                headers, body: bodyData === undefined ? undefined : JSON.stringify(bodyData),
+                credentials: "same-origin", cache: "no-store", redirect: "error", signal: requestSignal
+            });
+            if (response.status === 204) return null;
+            if (!response.ok) {
+                throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
+            }
+            if (!response.body) throw new Error("Response stream unavailable.");
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let length = 0;
+            let body = "";
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    length += value.byteLength;
+                    if (length > max) {
+                        await reader.cancel();
+                        throw new Error("Response exceeded the dashboard's size limit.");
+                    }
+                    body += decoder.decode(value, { stream: true });
+                }
+                body += decoder.decode();
+                if (navigation.aborted) throw navigation.reason;
+                return JSON.parse(body);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        function problem(error) {
+            if (error.status === 400) return "Settings were rejected. Check the field formats and any service environment overrides.";
+            if (error.status === 413) return "The settings request exceeded the size limit.";
+            if (error.status === 429) return "Another diagnostic is running. Try again shortly.";
+            if (error.status === 503) return "The server probe did not return within its budget or the source is unavailable.";
+            if (error.status === 401 || error.status === 403) return "Administrator access is required.";
+            if (error.status === 404) return "The source is unavailable or was rotated.";
+            if (error.name === "AbortError" || error.name === "TimeoutError") return "The request timed out.";
+            return error.message || "Jellyfin could not return this data.";
+        }
+
+        async function section(name, operation) {
+            const navigation = signal;
+            navigation.throwIfAborted();
+            try {
+                await operation();
+            } catch (error) {
+                navigation.throwIfAborted();
+                status(name, problem(error));
+            }
+        }
+
+        async function perform(operation) {
+            if (busy || !pageRequest || pageRequest.signal.aborted) return;
+            const current = pageRequest;
+            busy = true;
+            for (const name of actionButtons) field(name).disabled = true;
+            try {
+                await operation();
+            } catch (error) {
+                if (!current.signal.aborted) status("status", problem(error));
+            } finally {
+                if (current === pageRequest) {
+                    busy = false;
+                    for (const name of actionButtons) field(name).disabled = false;
+                }
+            }
+        }
+
+        async function overview(initialInfo) {
+            await section("server", async () => {
+                const info = initialInfo || await read("System/Info");
+                status("server", [info.ServerName || "Jellyfin", info.Version,
+                    info.OperatingSystemDisplayName || info.OperatingSystem, info.SystemArchitecture,
+                    info.HasPendingRestart ? "Restart pending" : null].filter(Boolean).join(" · "));
+                report.server = { version: info.Version, restartPending: !!info.HasPendingRestart };
+            });
+            for (const name of ["active-total", "transcode-total", "task-total"]) status(name, "—");
+            field("stream-chart").replaceChildren();
+            setList("sessions", []);
+            setList("tasks", []);
+            delete report.playback;
+            delete report.tasks;
+            await section("playback", async () => {
+                const sessions = await read("Sessions");
+                const active = sessions.filter(session => session.NowPlayingItem);
+                const transcodes = active.filter(session => session.PlayState?.PlayMethod === "Transcode"
+                    || (session.TranscodingInfo && session.TranscodingInfo.IsVideoDirect === false)).length;
+                const paused = active.filter(session => session.PlayState?.IsPaused).length;
+                status("active-total", active.length);
+                status("transcode-total", transcodes);
+                status("playback", active.length ? paused + " paused" : "No streams are playing.");
+                const methods = new Map();
+                for (const session of active) {
+                    const method = session.PlayState?.PlayMethod;
+                    const label = { DirectPlay: "Direct play", DirectStream: "Direct stream", Transcode: "Transcode" }[method] || "Unknown method";
+                    methods.set(label, (methods.get(label) || 0) + 1);
+                }
+                field("stream-chart").replaceChildren(...(methods.size ? [chart("Playback methods",
+                    [...methods].map(([label, value]) => ({ label, value })))] : []));
+                setList("sessions", active.slice(0, 24).map(session => {
+                    const media = session.NowPlayingItem;
+                    const transcode = session.TranscodingInfo;
+                    return row([media.SeriesName, media.Name].filter(Boolean).join(" · "), [session.UserName,
+                        session.Client, session.PlayState?.PlayMethod, session.PlayState?.IsPaused ? "Paused" : null,
+                        transcode?.VideoCodec, transcode?.HardwareAccelerationType,
+                        Number.isFinite(transcode?.Framerate) ? transcode.Framerate.toFixed(1) + " fps" : null,
+                        Number.isFinite(transcode?.Bitrate) ? Math.round(transcode.Bitrate / 1000) + " kbps" : null,
+                        transcode?.TranscodeReasons?.join(", ")].filter(Boolean).join(" · "));
+                }));
+                report.playback = { active: active.length, paused, transcodes };
+            });
+            await section("task-summary", async () => {
+                const tasks = await read("ScheduledTasks", { isHidden: false });
+                const running = tasks.filter(task => /Running|Cancelling/.test(task.State));
+                const failed = tasks.filter(task => task.LastExecutionResult?.Status === "Failed")
+                    .sort((a, b) => Date.parse(b.LastExecutionResult.EndTimeUtc) - Date.parse(a.LastExecutionResult.EndTimeUtc));
+                const deskTasks = tasks.filter(task => /^(RemoteAdminDeskScan|RemoteAdminDeskMedia)$/.test(task.Key));
+                status("task-total", failed.length);
+                status("task-summary", running.length + " active · " + failed.length + " failed on their latest run");
+                setList("tasks", [...running, ...failed.filter(task => !running.includes(task)),
+                    ...deskTasks.filter(task => !running.includes(task) && !failed.includes(task))].slice(0, 18)
+                    .map(task => row(task.Name, [task.State, task.LastExecutionResult?.Status,
+                        task.LastExecutionResult && formatDate(task.LastExecutionResult.EndTimeUtc)].filter(Boolean).join(" · "))));
+                report.tasks = { running: running.length, failed: failed.length };
+            });
+        }
+
+        function renderStorage() {
+            if (!storage) return;
+            status("storage", [storage.problem || "Checked " + formatDate(storage.sampledAt),
+                storage.limited ? "Library location limit reached" : "", "Forecasts use a free-space reserve"].filter(Boolean).join(" · "));
+            const historyRows = [];
+            const eligible = storage.volumes.filter(volume => !volume.problem && volume.total > 0);
+            const freeRatios = eligible.map(volume => volume.available / volume.total);
+            status("space-total", freeRatios.length ? (100 * Math.min(...freeRatios)).toFixed(1) + "%" : "—");
+            const cadenceByMount = arrivals ? DeskAnalysis.arrivalRates(arrivals, storage, arrivalLimit) : null;
+            const volumes = storage.volumes.map(volume => {
+                const fragment = document.createDocumentFragment();
+                const name = (volume.mount || "Unknown") + " · " + (volume.fileSystem || "unknown file system");
+                fragment.append(row(name, volume.problem || (bytes(volume.available) + " free / " + bytes(volume.total))));
+                if (volume.problem) return fragment;
+                const meter = document.createElement("meter");
+                meter.max = volume.total;
+                meter.value = volume.available;
+                meter.setAttribute("aria-label", "Available space on " + volume.mount);
+                fragment.append(meter);
+                const trend = DeskAnalysis.forecast(history, volume);
+                const estimate = trend.results.find(result => result.window === 30) || trend.results.at(-1);
+                const cadence = cadenceByMount?.get(volume.mount);
+                if (volume.available <= trend.reserve) fragment.append("At or below the " + bytes(trend.reserve) + " reserve.");
+                else if (estimate) {
+                    fragment.append(estimate.rate > 0
+                        ? Math.ceil(estimate.days) + " days to " + bytes(trend.reserve) + " reserve · " + bytes(estimate.rate) + "/day net growth"
+                        : "No depletion projected from current samples.");
+                    fragment.append(" · " + estimate.samples + " samples across " + Math.round(estimate.span) + " days");
+                } else fragment.append("Collect more daily samples for a net growth forecast.");
+                if (cadence && cadence.rate > 0) {
+                    const details = document.createElement("div");
+                    details.textContent = Math.max(0, Math.ceil((volume.available - trend.reserve) / cadence.rate))
+                        + " days at the 30-day indexed-addition pace · " + cadence.arrivals
+                        + " additions · " + bytes(cadence.rate) + "/day before deletions";
+                    fragment.append(details);
+                }
+                if (trend.reset) fragment.append(document.createElement("br"), "Forecast baseline restarted after capacity change or major cleanup.");
+                const points = trend.series.slice(-7).map(point => ({
+                    label: new Date(point.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+                    value: point.available,
+                    detail: bytes(point.available)
+                }));
+                if (points.length > 1) historyRows.push(chart("Free space on " + volume.mount, points, volume.total));
+                return fragment;
+            });
+            setList("volumes", volumes.length ? volumes : ["No verified media volume returned."]);
+            setList("mounts", storage.locations.map(location =>
+                [location.library, location.path, location.mount || location.problem].filter(Boolean).join(" · ")));
+            setList("history", historyRows);
+            field("mount-detail").hidden = !storage.locations.length && !historyRows.length;
+            report.storage = { sampledAt: storage.sampledAt, limited: storage.limited,
+                volumes: storage.volumes.map(({ total, available, problem }) => ({ total, available, problem: !!problem })) };
+        }
+
+        async function readStorage() {
+            status("storage", "Reading media mount capacity…");
+            const current = await read("RemoteAdminDesk/Storage");
+            if (Date.now() - historyChecked >= 60_000) {
+                await section("storage", async () => {
+                    const saved = await read("RemoteAdminDesk/Samples");
+                    for (const sample of saved.samples) history = DeskAnalysis.recordStorage(history, sample);
+                    historyChecked = Date.now();
+                });
+            }
+            history = DeskAnalysis.recordStorage(history, current);
+            storage = current;
+            try { localStorage.setItem(historyKey, JSON.stringify(history)); } catch { /* scheduled history remains available */ }
+            renderStorage();
+        }
+
+        async function readAdditions() {
+            status("additions", "Reading up to 100 indexed additions…");
+            const result = await read("Items", { recursive: true, includeItemTypes: "Movie,Episode", sortBy: "DateCreated",
+                sortOrder: "Descending", limit: 100, enableTotalRecordCount: false, enableImages: false,
+                enableUserData: false, fields: "DateCreated,MediaSources" });
+            arrivals = DeskAnalysis.additions(result.Items);
+            arrivalLimit = arrivals.length === 100;
+            status("additions", arrivals.length + " indexed movies and episodes in this sample"
+                + (arrivalLimit ? " · capped at 100" : "") + ". Import times may differ from downloads.");
+            setList("recent", arrivals.slice(0, 15).map(item =>
+                row(item.name, [item.type, formatDate(item.date), bytes(item.size)].join(" · "))));
+            const formats = DeskAnalysis.codecCounts(arrivals);
+            if (formats.size) field("codecs").replaceChildren(chart("Video codec counts in this sample",
+                [...formats].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([label, value]) => ({ label, value }))));
+            else status("codecs", "Video codecs unavailable in this sample.");
+            const days = DeskAnalysis.recentDayCounts(arrivals);
+            field("arrival-chart").replaceChildren(...(days.some(day => day.value) ? [chart("Indexed additions · last 7 days", days)] : []));
+            report.additions = { sampled: arrivals.length, capped: arrivalLimit, codecs: [...formats.keys()].sort() };
+            renderStorage();
+        }
+
+        for (const [from, to] of [["overview-window", "window"], ["window", "overview-window"]]) {
+            field(from).addEventListener("change", () => { field(to).value = field(from).value; });
+        }
+
+        async function readUsage() {
+            const days = Number(field("window").value);
+            status("usage", "Reading recent Jellyfin activity events…");
+            status("overview-history-status", "Reading recent Jellyfin activity events…");
+            const now = Date.now();
+            const result = await read("System/ActivityLog/Entries", { minDate: new Date(now - days * 86400000).toISOString(),
+                limit: 500, hasUserId: true });
+            if (!knownUsers || Date.now() - knownUsers.checked >= 60_000) {
+                try {
+                    const users = await read("Users", { enableImages: false });
+                    knownUsers = { users, checked: Date.now() };
+                } catch (error) {
+                    signal.throwIfAborted();
+                }
+            }
+            const usage = DeskAnalysis.playbackSummary(result.Items, knownUsers?.users || []);
+            const capped = result.Items.length === 500 || result.TotalRecordCount > result.Items.length;
+            const coverage = days + "-day window" + (capped ? " · latest " + result.Items.length + " account events; partial window" : "");
+            status("overview-history-status", coverage + " · Jellyfin activity retention determines how far back this goes.");
+            status("usage", usage.logins + " successful logins · " + usage.sessions + " connected sessions · "
+                + usage.starts + " stream starts · " + usage.stops + " stream stops · " + coverage
+                + ". Counts use recorded events. Watch time is unavailable from this source.");
+            setList("users", usage.users.length ? usage.users.slice(0, 20).map(user =>
+                row(user.name, user.logins + " logins · " + user.sessions + " connections · " + user.starts
+                    + " stream starts · " + user.stops + " stream stops · latest " + formatDate(user.latest)))
+                : ["No attributable activity events in this sample."]);
+            setList("popular", usage.titles.length ? usage.titles.slice(0, 12).map(title =>
+                (title.name || "Title ID " + title.id) + " · " + title.starts + " starts · " + title.viewers.size + " identified viewers")
+                : ["No title-attributed starts in this sample."]);
+            field("usage-users").hidden = false;
+            field("usage-popular").hidden = false;
+            const usageCharts = [];
+            const usersByStarts = usage.users.filter(user => user.starts > 0).slice(0, 6);
+            if (usersByStarts.length) usageCharts.push(chart("Playback starts by viewer",
+                usersByStarts.map(user => ({ label: user.name, value: user.starts }))));
+            if (usage.titles.length) usageCharts.push(chart("Playback starts by title", usage.titles.slice(0, 6)
+                .map(title => ({ label: title.name || "Title ID " + title.id, value: title.starts }))));
+            field("usage-charts").replaceChildren(...usageCharts);
+            const events = [
+                { label: "Successful logins", value: usage.logins, kind: "logins" },
+                { label: "Connected sessions", value: usage.sessions, kind: "sessions" },
+                { label: "Stream starts", value: usage.starts, kind: "starts" }
+            ];
+            const buckets = DeskAnalysis.activityBuckets(usage.events, days, now);
+            field("overview-history-charts").replaceChildren(donut("Recorded event mix", events),
+                ...events.filter(event => event.value > 0).map(event => chart(event.label + " over time",
+                    buckets.map(bucket => ({ label: bucket.label, value: bucket[event.kind] })))));
+            report.usage = { days, starts: usage.starts, stops: usage.stops, logins: usage.logins, sessions: usage.sessions, capped };
+        }
+
+        async function readLogs() {
+            status("log-status", "Reading the recent log catalog…");
+            const result = await read("RemoteAdminDesk/Logs");
+            const select = field("logs");
+            select.replaceChildren();
+            for (const log of result.files) {
+                const option = document.createElement("option");
+                option.value = log.name;
+                option.textContent = log.name + " · " + formatDate(log.modifiedAt);
+                select.append(option);
+            }
+            status("log-status", !result.files.length ? "No eligible Jellyfin or FFmpeg logs were found."
+                : result.limited ? "Catalog limited to 512 directory entries. Select a file to analyze its tail."
+                    : "Select a file to analyze its tail.");
+            clearLogResult();
+            field("picker").hidden = !result.files.length;
+            field("read-tail").hidden = !result.files.length;
+        }
+
+        function clearLogResult() {
+            field("log-chart").replaceChildren();
+            if (report) delete report.log;
+            field("raw").hidden = true;
+            field("raw").open = false;
+            status("excerpt", "");
+            setList("findings", []);
+        }
+        field("logs").addEventListener("change", () => {
+            clearLogResult();
+            status("log-status", "Select Analyze log tail to check the selected file.");
+        });
+
+        async function readTail() {
+            clearLogResult();
+            status("log-status", "Reading and analyzing the selected log tail…");
+            const log = await read("RemoteAdminDesk/LogTail", { name: field("logs").value });
+            const outcome = DeskAnalysis.analyze(log.content);
+            field("log-chart").replaceChildren(chart("Log entries by severity", [
+                { label: "Fatal", value: outcome.levels.fatal, tone: "critical" },
+                { label: "Error", value: outcome.levels.error, tone: "critical" },
+                { label: "Warning", value: outcome.levels.warning, tone: "warning" }
+            ]));
+            status("log-status", outcome.lines + " excerpt lines checked · "
+                + outcome.levels.fatal + " fatal · " + outcome.levels.error + " error · " + outcome.levels.warning + " warning"
+                + (log.truncated || outcome.offset ? " · limited sample" : "")
+                + (outcome.findings.length ? "" : " · no known signatures in this excerpt"));
+            setList("findings", outcome.findings.map(finding => {
+                const details = document.createElement("details");
+                const summary = document.createElement("summary");
+                const note = document.createElement("p");
+                const examples = document.createElement("pre");
+                const severity = document.createElement("span");
+                severity.className = "rad-severity";
+                severity.dataset.level = finding.severity;
+                severity.textContent = finding.severity[0].toUpperCase() + finding.severity.slice(1);
+                summary.append(severity, finding.title + " · " + finding.count + " matching lines");
+                note.textContent = finding.next;
+                examples.textContent = finding.examples.map(example => "Excerpt line " + example.line + " · " + example.text).join("\n");
+                details.append(summary, note, examples);
+                return details;
+            }));
+            status("excerpt", log.content);
+            field("raw").hidden = !log.content;
+            report.log = { lines: outcome.lines, partial: log.truncated || outcome.offset > 0,
+                levels: outcome.levels, findings: outcome.findings.map(({ title, severity, count }) => ({ title, severity, count })) };
+        }
+
+        async function readBranches() {
+            status("branch-status", "Checking configured mount points…");
+            const result = await read("RemoteAdminDesk/Branches", undefined, 32 * 1024);
+            status("branch-status", result.problem || result.branches.length + " expected mounts checked"
+                + (result.limited ? " · maximum eight branches" : "") + ".");
+            const readable = result.branches.filter(volume => !volume.problem && volume.total > 0);
+            field("branch-chart").replaceChildren(...(readable.length ? [chart("Available capacity by branch",
+                readable.map(volume => ({ label: volume.mount, value: volume.available / volume.total,
+                    detail: bytes(volume.available) + " free" })), 1)] : []));
+            setList("branch-list", result.branches.map(volume => row(volume.mount,
+                volume.problem || volume.fileSystem + " · " + bytes(volume.total) + " total")));
+            report.branches = { measured: readable.length, missingOrUnavailable: result.branches.length - readable.length,
+                limited: result.limited };
+        }
+
+        async function readTriage() {
+            status("triage-status", "Reading the latest FFmpeg log excerpts…");
+            const result = await read("RemoteAdminDesk/PlaybackTriage", undefined, 32 * 1024);
+            status("triage-status", result.logs.length
+                ? "Recent FFmpeg logs sorted by time. Compare their timestamps with the affected session or stream."
+                : "No recent FFmpeg transcode logs were found.");
+            setList("triage-logs", result.logs.map(log => {
+                const details = document.createElement("details");
+                const title = document.createElement("summary");
+                title.textContent = formatDate(log.modifiedAt) + " · " + log.name
+                    + (log.truncated ? " · tail excerpt" : "");
+                const evidence = document.createElement("pre");
+                evidence.textContent = log.signals.join("\n") || "No common encoding or playback signal in this excerpt.";
+                details.append(title, evidence);
+                return details;
+            }));
+            report.triage = { logs: result.logs.length, withSignals: result.logs.filter(log => log.signals.length).length,
+                catalogLimited: result.limited };
+        }
+
+        async function readImports() {
+            status("import-status", "Checking the first page of each configured Arr queue…");
+            const result = await read("RemoteAdminDesk/Imports", undefined, 128 * 1024);
+            const descriptions = {
+                missing: "API key unset", invalid: "API key format invalid", unauthorized: "Access rejected",
+                "api-error": "API request failed", timeout: "Timed out", unreachable: "Could not connect",
+                "invalid-response": "Unexpected response", "response-limit": "Response exceeded the size cap"
+            };
+            const ready = result.filter(queue => queue.state === "ready");
+            status("import-status", ready.length + " of " + result.length
+                + " services responded. Up to 20 live queue records are shown per service.");
+            field("import-chart").replaceChildren(...(ready.length ? [chart("Queue totals",
+                ready.map(queue => ({ label: queue.service, value: queue.total ?? queue.items.length })))] : []));
+            setList("import-list", result.map(queue => {
+                if (queue.state !== "ready") return row(queue.service, descriptions[queue.state] || "Unavailable");
+                const container = document.createDocumentFragment();
+                container.append(row(queue.service, (queue.total ?? queue.items.length) + " in queue"));
+                const items = document.createElement("ul");
+                items.className = "rad-data";
+                for (const item of queue.items) {
+                    const entry = document.createElement("li");
+                    entry.append(row(item.title, [item.status, item.state, ...item.reasons].filter(Boolean).join(" · ")));
+                    items.append(entry);
+                }
+                container.append(items);
+                return container;
+            }));
+            report.imports = result.map(({ service, state, total }) => ({ service, state, total }));
+        }
+
+        async function readNotifications() {
+            status("notification-status", "Reading local delivery history…");
+            setList("notification-channels", []);
+            delete report.notifications;
+            const result = await read("RemoteAdminDesk/Notifications", undefined, 24 * 1024);
+            const configuration = { missing: "Webhook unset", invalid: "Webhook format invalid", configured: "Webhook configured" };
+            const delivery = {
+                delivered: "Delivered", timeout: "Timed out", "rate-limited": "Rate limited",
+                rejected: "Discord rejected the request", invalid: "Webhook format invalid", unreachable: "Discord unreachable"
+            };
+            const channels = [["Diagnostic alerts", result.diagnostics], ["New movies and episodes", result.media]];
+            setList("notification-channels", channels.map(([name, channel]) => {
+                const event = channel.delivery;
+                return row(name, [
+                    configuration[channel.configuration] || "Configuration unknown",
+                    channel.lastScanAt ? "Last scan " + formatDate(channel.lastScanAt) : "No recorded scan",
+                    event ? (delivery[event.status] || "Delivery status unknown") + " at " + formatDate(event.attemptedAt)
+                        : "No delivery attempted",
+                    event?.deliveredAt && event.status !== "delivered" ? "Last success " + formatDate(event.deliveredAt) : null
+                ].filter(Boolean).join(" · "));
+            }));
+            status("notification-status", (result.mediaBaseline ? "Media baseline established" : "Media baseline pending")
+                + " · " + result.pendingMedia + " queued for delivery.");
+            report.notifications = result;
+        }
+
+        function renderSettings(result, message) {
+            savedSettings = result;
+            forgetSettings();
+            for (const [name, key] of secretFields) {
+                const item = result[key];
+                status(name + "-status", item.environmentOverride ? "Managed by the service environment."
+                    : item.configured ? "Saved. Enter a replacement or select Remove saved value."
+                        : "Unset.");
+                field(name).disabled = !result.canEdit || item.environmentOverride;
+                field(name + "-clear").disabled = field(name).disabled || !item.configured;
+            }
+            const branch = field("settings-branches");
+            branch.value = result.branchPaths || "";
+            branch.disabled = !result.canEdit || result.mediaBranches.environmentOverride;
+            status("settings-branches-status", result.mediaBranches.environmentOverride
+                ? "Managed by the service environment." : "Separate up to eight exact Linux mount points with colons.");
+            field("save-settings").disabled = !result.canEdit;
+            field("settings-form").hidden = false;
+            status("settings-status", message || (result.canEdit
+                ? "Saved credentials are hidden." : "Use the service environment to configure integrations on this host."));
+        }
+
+        async function readSettings() {
+            status("settings-status", "Loading configuration status…");
+            renderSettings(await read("RemoteAdminDesk/Settings", undefined, 24 * 1024));
+        }
+
+        field("settings-form").addEventListener("submit", event => {
+            event.preventDefault();
+            if (!savedSettings?.canEdit) return;
+            const changes = {};
+            for (const [name, key] of secretFields) {
+                if (field(name).disabled) continue;
+                const replacement = field(name).value.trim();
+                const remove = field(name + "-clear").checked;
+                if (replacement && remove) {
+                    status("settings-status", "Choose either a replacement or removal for each credential.");
+                    return;
+                }
+                if (remove || replacement) changes[key] = remove ? "" : replacement;
+            }
+            const branch = field("settings-branches");
+            if (!branch.disabled && branch.value.trim() !== savedSettings.branchPaths) changes.mediaBranches = branch.value.trim();
+            if (!Object.keys(changes).length) {
+                status("settings-status", "No changes to save.");
+                return;
+            }
+            perform(() => section("settings-status", async () => {
+                const save = field("save-settings");
+                save.disabled = true;
+                status("settings-status", "Saving settings…");
+                try {
+                    renderSettings(await read("RemoteAdminDesk/Settings", undefined, 24 * 1024, changes),
+                        "Settings saved. The next check or scheduled task will use them.");
+                } finally {
+                    save.disabled = !savedSettings?.canEdit;
+                }
+            }));
+        });
+
+        async function activate() {
+            pageRequest?.abort();
+            const current = new AbortController();
+            pageRequest = current;
+            signal = current.signal;
+            busy = false;
+            activeClient = window.ApiClient;
+            field("panels").hidden = true;
+            field("refresh").hidden = true;
+            field("report-panel").hidden = true;
+            field("snapshot").hidden = true;
+            field("server").hidden = true;
+            field("usage-users").hidden = true;
+            field("usage-popular").hidden = true;
+            selectTab(tabs[0]);
+            field("export").value = "";
+            for (const name of ["active-total", "transcode-total", "task-total", "space-total"]) status(name, "—");
+            for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "overview-history-charts", "branch-chart", "import-chart"]) field(name).replaceChildren();
+            field("picker").hidden = true;
+            field("read-tail").hidden = true;
+            field("raw").hidden = true;
+            field("mount-detail").hidden = true;
+            for (const name of ["sessions", "tasks", "volumes", "mounts", "history", "recent", "users", "popular", "findings", "notification-channels", "triage-logs", "branch-list", "import-list"]) setList(name, []);
+            for (const name of ["usage", "excerpt", "codecs", "playback", "task-summary"]) status(name, "");
+            status("storage", "Capture current free space and view previous samples.");
+            status("additions", "Movies and episodes indexed by Jellyfin.");
+            status("log-status", "Check Jellyfin server and FFmpeg logs for recurring errors.");
+            status("notification-status", "View webhook readiness, last delivery, and pending media alerts.");
+            status("overview-history-status", "View successful logins, connected sessions, and stream starts from recorded Jellyfin activity.");
+            status("branch-status", "Check free space and detect missing configured branch mounts.");
+            status("triage-status", "Compare recent FFmpeg evidence with the current streams above.");
+            status("import-status", "Check current downloads and the reasons reported for import warnings or failures.");
+            savedSettings = null;
+            forgetSettings();
+            field("settings-form").hidden = true;
+            status("settings-status", "Load settings to manage integrations.");
+            report = newReport();
+            storage = null;
+            arrivals = null;
+            history = [];
+            historyChecked = 0;
+            knownUsers = null;
+            status("status", "Checking administrator access…");
+            try {
+                const access = await read("RemoteAdminDesk/Access", undefined, 4096);
+                const actor = await read("Users/Me", undefined, 128 * 1024);
+                current.signal.throwIfAborted();
+                if (!actor?.Policy?.IsAdministrator || !actor.Id) throw new Error("A Jellyfin administrator account is required.");
+                const info = await read("System/Info", undefined, 128 * 1024);
+                if (!DeskAnalysis.matchesVersion(info.Version, access?.jellyfinVersion)) {
+                    throw new Error(access?.jellyfinVersion
+                        ? "This build targets Jellyfin " + access.jellyfinVersion + "."
+                        : "The plugin did not report its Jellyfin build version.");
+                }
+                historyKey = "jellyfin.remoteAdminDesk.v1:" + info.Id + ":" + actor.Id;
+                try {
+                    const saved = localStorage.getItem(historyKey);
+                    if (saved && saved.length < 512 * 1024) {
+                        const parsed = JSON.parse(saved);
+                        if (Array.isArray(parsed)) history = parsed.filter(row => Number.isFinite(row?.timestamp)
+                            && typeof row.bucket === "string" && Array.isArray(row.volumes)).slice(-120);
+                    }
+                } catch { /* collection works without browser storage */ }
+                if (current.signal.aborted) return;
+                field("panels").hidden = false;
+                field("refresh").hidden = false;
+                field("snapshot").hidden = false;
+                field("server").hidden = false;
+                await perform(() => overview(info));
+                if (!current.signal.aborted) status("status", "Overview checked at " + new Date().toLocaleTimeString());
+            } catch (error) {
+                if (!current.signal.aborted) status("status", problem(error));
+            }
+        }
+
+        field("refresh").addEventListener("click", () => perform(async () => {
+            await overview();
+            if (!signal.aborted) status("status", "Overview checked at " + new Date().toLocaleTimeString());
+        }));
+        for (const [action, output, operation] of [
+            ["read-storage", "storage", readStorage], ["read-additions", "additions", readAdditions],
+            ["read-usage", "usage", readUsage], ["read-logs", "log-status", readLogs], ["read-tail", "log-status", readTail],
+            ["read-notifications", "notification-status", readNotifications], ["read-branches", "branch-status", readBranches],
+            ["read-triage", "triage-status", readTriage], ["read-imports", "import-status", readImports],
+            ["read-history", "overview-history-status", readUsage], ["read-settings", "settings-status", readSettings]
+        ]) field(action).addEventListener("click", () => perform(() => section(output, operation)));
+        field("snapshot").addEventListener("click", () => {
+            const output = field("export");
+            output.value = JSON.stringify({ ...report, generatedAt: new Date().toISOString() }, null, 2);
+            field("report-panel").hidden = false;
+            status("copy-status", "");
+            output.focus();
+        });
+        field("copy").addEventListener("click", async () => {
+            const output = field("export");
+            const navigation = signal;
+            try {
+                await navigator.clipboard.writeText(output.value);
+                if (!navigation.aborted) status("copy-status", "Snapshot copied.");
+            } catch {
+                if (navigation.aborted) return;
+                output.focus();
+                output.select();
+                status("copy-status", "Snapshot selected. Use your system copy shortcut.");
+            }
+        });
+        page.addEventListener("pageshow", activate);
+        page.addEventListener("pagehide", () => {
+            pageRequest?.abort();
+            savedSettings = null;
+            forgetSettings();
+            field("settings-form").hidden = true;
+            field("panels").hidden = true;
+            status("excerpt", "");
+            field("export").value = "";
+            field("report-panel").hidden = true;
+            field("logs").replaceChildren();
+            for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "codecs", "overview-history-charts", "branch-chart", "import-chart"]) field(name).replaceChildren();
+            for (const name of ["findings", "recent", "sessions", "users", "popular", "mounts", "notification-channels", "triage-logs", "branch-list", "import-list"]) setList(name, []);
+        });
+    })();
+    </script>
+</div>

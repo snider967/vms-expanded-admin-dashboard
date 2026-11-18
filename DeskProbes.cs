@@ -1,0 +1,286 @@
+using System.Collections.Concurrent;
+using System.Text;
+using System.Text.RegularExpressions;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Library;
+
+namespace Jellyfin.Plugin.RemoteAdminDesk;
+
+internal sealed class DeskProbeBusyException : Exception { }
+
+internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPaths paths)
+{
+    private const int LogBytes = 96 * 1024;
+    private const int MaxLogEntries = 512;
+    private const int MaxLocations = 32;
+    internal static readonly SemaphoreSlim StorageGate = new(1, 1);
+    internal static readonly SemaphoreSlim LogsGate = new(1, 1);
+    internal static readonly SemaphoreSlim StateGate = new(1, 1);
+    private static StorageReport? _storageCache;
+    private static LogCatalog? _logCache;
+    private static readonly ConcurrentDictionary<string, LogExcerpt> LogCache = new(StringComparer.Ordinal);
+
+    internal StorageReport? CachedStorage => Volatile.Read(ref _storageCache) is { } cached
+        && IsFresh(cached.SampledAt, 90) ? cached : null;
+    internal LogCatalog? CachedCatalog => Volatile.Read(ref _logCache) is { } cached
+        && IsFresh(cached.SampledAt, 30) ? cached : null;
+    internal LogExcerpt? GetCachedLog(string name) => LogCache.TryGetValue(name, out var cached)
+        && IsFresh(cached.SampledAt, 15) ? cached : null;
+    internal static bool IsLogName(string name) => name.Length <= 160 && LogName().IsMatch(name);
+
+    internal static async Task<T> Run<T>(
+        SemaphoreSlim gate, TimeSpan timeout, Func<CancellationToken, T> probe, CancellationToken cancellationToken)
+    {
+        if (!gate.Wait(0)) throw new DeskProbeBusyException();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(timeout);
+        var token = budget.Token;
+        // Kernel I/O can outlive cancellation. Keep the worker slot until actual completion.
+        var work = Task.Run(() =>
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                return probe(token);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        try
+        {
+            return await work.WaitAsync(token);
+        }
+        finally
+        {
+            if (!work.IsCompletedSuccessfully)
+            {
+                _ = work.ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+    }
+
+    internal StorageReport ReadStorage(CancellationToken ct)
+    {
+        var at = DateTimeOffset.UtcNow;
+        if (!OperatingSystem.IsLinux())
+            return new StorageReport(at, [], [], false, "Media storage probing is available on Linux.");
+        var mounts = ReadMounts();
+        if (mounts is null) return new StorageReport(at, [], [], false, "Mount table exceeds the diagnostic limit.");
+
+        ct.ThrowIfCancellationRequested();
+        var locations = library.GetVirtualFolders(false)
+            .SelectMany(folder => folder.Locations.Select(location => (folder.Name, Path: location)))
+            .Take(MaxLocations + 1).ToArray();
+        var readings = new Dictionary<string, Volume>(StringComparer.Ordinal);
+        var mappings = new List<LibraryLocation>(MaxLocations);
+        foreach (var location in locations.Take(MaxLocations))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Path.IsPathFullyQualified(location.Path)) continue;
+            var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(location.Path));
+            var mount = FindMount(path, mounts);
+            if (mount is null || (mount.Path == "/" && IsExternalRoot(path)))
+            {
+                mappings.Add(new LibraryLocation(location.Name, path, null, "No dedicated mount is visible for this location."));
+                continue;
+            }
+            if (!readings.ContainsKey(mount.Path)) readings.Add(mount.Path, ReadVolume(mount));
+            mappings.Add(new LibraryLocation(location.Name, path, mount.Path, null));
+        }
+        ct.ThrowIfCancellationRequested();
+        var report = new StorageReport(at, readings.Values.ToArray(), mappings.ToArray(), locations.Length > MaxLocations, null);
+        Volatile.Write(ref _storageCache, report);
+        return report;
+    }
+
+    private static Dictionary<string, Mount>? ReadMounts()
+    {
+        using var file = File.OpenRead("/proc/self/mountinfo");
+        var buffer = new byte[256 * 1024 + 1];
+        var length = file.ReadAtLeast(buffer, buffer.Length, false);
+        if (length == buffer.Length)
+            return null;
+
+        var mounts = new Dictionary<string, Mount>(StringComparer.Ordinal);
+        foreach (var line in Encoding.UTF8.GetString(buffer, 0, length).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var fields = line.Split(' ');
+            if (fields.Length < 8) continue;
+            var separator = Array.IndexOf(fields, "-", 6);
+            if (separator < 0 || separator + 1 >= fields.Length) continue;
+            var name = MountEscape().Replace(fields[4], match => ((char)Convert.ToInt32(match.Value[1..], 8)).ToString());
+            mounts[name] = new Mount(name, fields[separator + 1], fields[2]);
+        }
+
+        return mounts;
+    }
+
+    private static string[] BranchPaths(string? configured) => (configured ?? "")
+        .Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(path => path.Length < 1024 && Path.IsPathFullyQualified(path))
+        .Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)))
+        .Where(path => path != "/").Distinct(StringComparer.Ordinal).Take(9).ToArray();
+
+    internal BranchReport ReadBranches(string? configured, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsLinux()) return new BranchReport([], false, "Branch checks require Linux.");
+        var candidates = BranchPaths(configured);
+        if (candidates.Length == 0) return new BranchReport([], false, "Add the expected mount points in Settings.");
+        var mounts = ReadMounts();
+        if (mounts is null) return new BranchReport([], false, "Mount table exceeds the diagnostic limit.");
+        var branches = new List<Volume>();
+        foreach (var path in candidates.Take(8))
+        {
+            ct.ThrowIfCancellationRequested();
+            branches.Add(mounts.TryGetValue(path, out var mount)
+                ? ReadVolume(mount) : new Volume(path, "unknown", "", null, null, "Expected mount is missing."));
+        }
+        return new BranchReport(branches.ToArray(), candidates.Length > 8, null);
+    }
+
+    internal PlaybackTriageReport ReadPlaybackTriage(CancellationToken ct)
+    {
+        var catalog = CachedCatalog ?? ReadCatalog(ct);
+        var recent = new List<PlaybackLog>();
+        foreach (var entry in catalog.Files.Where(file =>
+            file.Name.StartsWith("FFmpeg", StringComparison.OrdinalIgnoreCase)).Take(4))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var tail = ReadTail(entry.Name, ct, 12 * 1024);
+                var lines = tail.Content.Split('\n');
+                var summary = lines.Select(line => line.Trim())
+                    .Where(line => line.Length > 0 && PlaybackSignal().IsMatch(line))
+                    .TakeLast(4).Select(line => line[..Math.Min(240, line.Length)]).ToArray();
+                recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated));
+            }
+            catch (FileNotFoundException)
+            {
+                // A log can rotate between catalog and probe.
+            }
+        }
+        return new PlaybackTriageReport(DateTimeOffset.UtcNow, recent.ToArray(), catalog.Limited);
+    }
+
+    [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error|drop=|speed=",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex PlaybackSignal();
+
+    private static Mount? FindMount(string path, Dictionary<string, Mount> mounts)
+    {
+        for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
+        {
+            if (mounts.TryGetValue(current, out var mount)) return mount;
+        }
+        return null;
+    }
+
+    private static bool IsExternalRoot(string path) => path is "/mnt" or "/media"
+        || path.StartsWith("/mnt/", StringComparison.Ordinal) || path.StartsWith("/media/", StringComparison.Ordinal);
+
+    private static Volume ReadVolume(Mount mount)
+    {
+        try
+        {
+            var drive = new DriveInfo(mount.Path);
+            var total = drive.TotalSize;
+            var available = drive.AvailableFreeSpace;
+            if (total > 0 && available >= 0 && available <= total)
+                return new Volume(mount.Path, mount.Kind, mount.Device, total, available, null);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // The mount might have disappeared or denied access.
+        }
+        return new Volume(mount.Path, mount.Kind, mount.Device, null, null, "Capacity is unavailable.");
+    }
+
+    internal LogCatalog ReadCatalog(CancellationToken ct)
+    {
+        var candidates = new List<LogEntry>();
+        var scanned = 0;
+        foreach (var path in Directory.EnumerateFiles(paths.LogDirectoryPath))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (++scanned > MaxLogEntries) break;
+            var file = new FileInfo(path);
+            try
+            {
+                if (IsLogName(file.Name) && IsOrdinaryFile(file.Attributes))
+                    candidates.Add(new LogEntry(file.Name, file.LastWriteTimeUtc, file.Length));
+            }
+            catch (FileNotFoundException)
+            {
+                // The file rotated during enumeration.
+            }
+        }
+        var catalog = new LogCatalog(DateTimeOffset.UtcNow,
+            candidates.OrderByDescending(log => log.ModifiedAt).Take(20).ToArray(), scanned > MaxLogEntries);
+        Volatile.Write(ref _logCache, catalog);
+        return catalog;
+    }
+
+    internal LogExcerpt ReadTail(string name, CancellationToken ct, int limit = LogBytes)
+    {
+        if (!IsLogName(name)) throw new FileNotFoundException();
+        var path = Path.Join(paths.LogDirectoryPath, name);
+        if (!IsOrdinaryFile(File.GetAttributes(path))) throw new FileNotFoundException();
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+        if (!fs.CanSeek) throw new FileNotFoundException();
+        var length = fs.Length;
+        var count = (int)Math.Min(length, limit + 1);
+        fs.Seek(length - count, SeekOrigin.Begin);
+        var bytes = new byte[count];
+        var read = 0;
+        while (read < count)
+        {
+            ct.ThrowIfCancellationRequested();
+            var next = fs.Read(bytes.AsSpan(read));
+            if (next == 0) break;
+            read += next;
+        }
+        ct.ThrowIfCancellationRequested();
+        var truncated = length > limit;
+        var start = truncated ? Array.IndexOf(bytes, (byte)'\n', 0, read) + 1 : 0;
+        var content = truncated && start == 0 ? string.Empty : Encoding.UTF8.GetString(bytes, start, read - start);
+        var result = new LogExcerpt(DateTimeOffset.UtcNow, name, length, truncated, content);
+        if (limit != LogBytes) return result;
+        if (LogCache.Count >= 4)
+            LogCache.TryRemove(LogCache.OrderBy(pair => pair.Value.SampledAt).First().Key, out _);
+        LogCache[name] = result;
+        return result;
+    }
+
+    private static bool IsOrdinaryFile(FileAttributes attributes) =>
+        (attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) == 0;
+    private static bool IsFresh(DateTimeOffset timestamp, int seconds)
+    {
+        var age = DateTimeOffset.UtcNow - timestamp;
+        return age >= TimeSpan.Zero && age < TimeSpan.FromSeconds(seconds);
+    }
+
+    [GeneratedRegex(@"\A(?:log(?:[_-][0-9A-Za-z._-]+)?|FFmpeg[._-][0-9A-Za-z._-]+)\.(?:log|txt)\z",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex LogName();
+
+    [GeneratedRegex(@"\\[0-7]{3}", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex MountEscape();
+
+    private sealed record Mount(string Path, string Kind, string Device);
+    internal sealed record Volume(string Mount, string FileSystem, string Device, long? Total, long? Available, string? Problem);
+    internal sealed record LibraryLocation(string Library, string Path, string? Mount, string? Problem);
+    internal sealed record StorageReport(DateTimeOffset SampledAt, Volume[] Volumes, LibraryLocation[] Locations, bool Limited, string? Problem);
+    internal sealed record BranchReport(Volume[] Branches, bool Limited, string? Problem);
+    internal sealed record PlaybackLog(string Name, DateTimeOffset ModifiedAt, string[] Signals, bool Truncated);
+    internal sealed record PlaybackTriageReport(DateTimeOffset CheckedAt, PlaybackLog[] Logs, bool Limited);
+    internal sealed record LogEntry(string Name, DateTimeOffset ModifiedAt, long Bytes);
+    internal sealed record LogCatalog(DateTimeOffset SampledAt, LogEntry[] Files, bool Limited);
+    internal sealed record LogExcerpt(DateTimeOffset SampledAt, string Name, long Bytes, bool Truncated, string Content);
+}

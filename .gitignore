@@ -1,0 +1,8 @@
+bin/
+obj/
+dist/
+__pycache__/
+*.user
+.env
+.env.*
+vault/
