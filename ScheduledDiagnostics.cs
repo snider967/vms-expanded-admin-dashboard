@@ -30,7 +30,8 @@ public sealed partial class ScheduledDiagnostics(
         try
         {
             var (state, settings) = await DeskProbes.Run(DeskProbes.StateGate, ProbeBudget,
-                ct => (DeskState.ReadDiagnostics(paths, ct), DeskSettings.Read(paths.DataPath, ct)), cancellationToken);
+                ct => (DeskState.ReadDiagnostics(paths, ct), DeskSettings.Read(paths.DataPath, ct)),
+                cancellationToken, waitForSlot: true);
             var webhook = DeskSettings.Effective(DeskDiscord.DiagnosticsVariable, settings.DiagnosticsWebhook);
             var storage = await DeskProbes.Run(DeskProbes.StorageGate, ProbeBudget, _probes.ReadStorage, cancellationToken);
             progress.Report(45);
@@ -47,14 +48,15 @@ public sealed partial class ScheduledDiagnostics(
                     && !storage.Limited && storage.Locations.All(location => location.Mount is not null)
                     ? false : state.StorageWarning;
             var configuredBranches = DeskSettings.Effective("RAD_MEDIA_BRANCHES", settings.MediaBranches);
-            var branches = !string.IsNullOrWhiteSpace(configuredBranches)
-                ? await DeskProbes.Run(DeskProbes.StorageGate, ProbeBudget,
-                    ct => _probes.ReadBranches(configuredBranches, ct), cancellationToken) : null;
+            var branches = await DeskProbes.Run(DeskProbes.StorageGate, ProbeBudget,
+                ct => new DashboardSnapshot.TimedBranches(DateTimeOffset.UtcNow, _probes.ReadBranches(configuredBranches, ct)),
+                cancellationToken);
             var mountState = storage.Locations.Any(location => location.Problem is not null)
                 || storage.Volumes.Any(volume => volume.Problem is not null)
-                || branches?.Branches.Any(volume => volume.Problem is not null) == true ? true
+                || branches.Result.Branches.Any(volume => volume.Problem is not null) ? true
                 : !storage.Limited && storage.Problem is null && storage.Locations.Length > 0
-                    && (branches is null || (!branches.Limited && branches.Problem is null)) ? false : state.MountWarning;
+                    && (string.IsNullOrWhiteSpace(configuredBranches) || (!branches.Result.Limited && branches.Result.Problem is null))
+                    ? false : state.MountWarning;
             var notices = new List<string>();
             if (mountState == true && state.MountWarning != true)
                 notices.Add("A media library mount is missing or its capacity could not be verified.");
@@ -77,7 +79,7 @@ public sealed partial class ScheduledDiagnostics(
                 if (result != DeskDiscord.Delivered)
                 {
                     // Keep notification state eligible for the next scan.
-                    await Save(state with { Samples = samples, Discord = delivery }, cancellationToken);
+                    await Save(state with { Discord = delivery }, cancellationToken);
                     logger.LogWarning("VMS Expanded Admin Dashboard could not deliver its Discord diagnostic notification.");
                     throw new InvalidOperationException("Discord diagnostic delivery failed.");
                 }
@@ -86,6 +88,8 @@ public sealed partial class ScheduledDiagnostics(
             var delivered = state.Delivered.Concat(unseen.Select(signal => signal.Key)).Distinct().TakeLast(64).ToArray();
             await Save(new DeskState.Diagnostics(samples, delivered, lowState, DateTimeOffset.UtcNow, delivery, mountState),
                 cancellationToken);
+            await DeskProbes.Run(DeskProbes.StateGate, ProbeBudget,
+                ct => DashboardSnapshot.UpdateChecks(paths, ct, storage, branches), cancellationToken, waitForSlot: true);
             progress.Report(100);
         }
         finally
@@ -95,7 +99,8 @@ public sealed partial class ScheduledDiagnostics(
     }
 
     private Task<bool> Save(DeskState.Diagnostics state, CancellationToken ct) =>
-        DeskProbes.Run(DeskProbes.StateGate, ProbeBudget, token => DeskState.SaveDiagnostics(paths, state, token), ct);
+        DeskProbes.Run(DeskProbes.StateGate, ProbeBudget, token => DeskState.SaveDiagnostics(paths, state, token),
+            ct, waitForSlot: true);
 
     private static bool IsLow(DeskProbes.Volume volume)
     {
@@ -174,14 +179,19 @@ public sealed class ScheduledMediaAlerts(
         try
         {
             var (previous, settings) = await DeskProbes.Run(DeskProbes.StateGate, Budget,
-                ct => (DeskState.ReadMedia(paths, ct), DeskSettings.Read(paths.DataPath, ct)), cancellationToken);
+                ct => (DeskState.ReadMedia(paths, ct), DeskSettings.Read(paths.DataPath, ct)),
+                cancellationToken, waitForSlot: true);
             var webhook = DeskSettings.Effective(DeskDiscord.MediaVariable, settings.MediaWebhook);
+            var sampledAt = DateTimeOffset.UtcNow;
+            var current = await DeskProbes.Run(QueryGate, Budget, ReadLatest, cancellationToken);
+            var media = Summarize(current, sampledAt);
             if (string.IsNullOrWhiteSpace(webhook))
             {
                 logger.LogInformation("VMS Expanded Admin Dashboard media alerts have no Discord webhook configured.");
+                await SaveDashboard(media, cancellationToken);
+                progress.Report(100);
                 return;
             }
-            var current = await DeskProbes.Run(QueryGate, Budget, ReadLatest, cancellationToken);
             progress.Report(60);
             var known = previous?.Known.ToHashSet();
             var cutoff = previous?.OldestDate ?? DateTimeOffset.MinValue;
@@ -215,6 +225,7 @@ public sealed class ScheduledMediaAlerts(
                 }
                 await Save(next with { Pending = next.Pending.Skip(batch.Length).ToArray(), Discord = delivery }, cancellationToken);
             }
+            await SaveDashboard(media, cancellationToken);
             progress.Report(100);
         }
         finally
@@ -224,7 +235,23 @@ public sealed class ScheduledMediaAlerts(
     }
 
     private Task<bool> Save(DeskState.Media state, CancellationToken ct) =>
-        DeskProbes.Run(DeskProbes.StateGate, Budget, token => DeskState.SaveMedia(paths, state, token), ct);
+        DeskProbes.Run(DeskProbes.StateGate, Budget, token => DeskState.SaveMedia(paths, state, token),
+            ct, waitForSlot: true);
+
+    private Task<bool> SaveDashboard(DashboardSnapshot.MediaHistory media, CancellationToken ct) =>
+        DeskProbes.Run(DeskProbes.StateGate, Budget, token => DashboardSnapshot.UpdateChecks(paths, token, media: media),
+            ct, waitForSlot: true);
+
+    private static DashboardSnapshot.MediaHistory Summarize(MediaItem[] items, DateTimeOffset sampledAt)
+    {
+        var earliestDay = sampledAt.UtcDateTime.Date.AddDays(-29);
+        var days = items.Where(item => item.Date.UtcDateTime.Date >= earliestDay)
+            .GroupBy(item => DateOnly.FromDateTime(item.Date.UtcDateTime))
+            .OrderBy(day => day.Key)
+            .Select(day => new DashboardSnapshot.MediaDay(day.Key, day.Count(item => !item.IsEpisode), day.Count(item => item.IsEpisode)))
+            .ToArray();
+        return new DashboardSnapshot.MediaHistory(sampledAt, items.Length == QueryLimit ? items[^1].Date : null, days);
+    }
 
     private MediaItem[] ReadLatest(CancellationToken ct)
     {
@@ -242,12 +269,12 @@ public sealed class ScheduledMediaAlerts(
         {
             var title = item is Episode episode ? $"{episode.SeriesName} · {episode.Name}" : item.Name;
             var clean = string.Concat((title ?? "Untitled media").Where(character => !char.IsControl(character)));
-            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()),
+            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()), item is Episode,
                 clean.Length > 100 ? clean[..97] + "…" : clean);
         }).ToArray();
     }
 
-    private sealed record MediaItem(Guid Id, DateTimeOffset Date, string Title);
+    private sealed record MediaItem(Guid Id, DateTimeOffset Date, bool IsEpisode, string Title);
 }
 
 internal static partial class DeskDiscord

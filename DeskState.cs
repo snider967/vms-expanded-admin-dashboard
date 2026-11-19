@@ -63,7 +63,7 @@ internal static class DeskState
 
     private static string StateDirectory(IApplicationPaths paths) => Path.Join(paths.DataPath, "remote-admin-desk");
 
-    private static T? Read<T>(IApplicationPaths paths, string filename, CancellationToken ct) where T : class
+    internal static T? Read<T>(IApplicationPaths paths, string filename, CancellationToken ct) where T : class
     {
         ct.ThrowIfCancellationRequested();
         try
@@ -82,7 +82,7 @@ internal static class DeskState
         }
     }
 
-    private static bool Save<T>(IApplicationPaths paths, string filename, T data, CancellationToken ct)
+    internal static bool Save<T>(IApplicationPaths paths, string filename, T data, CancellationToken ct)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(data, WireFormat);
         if (bytes.Length > MaxBytes) throw new IOException("Remote Admin Desk state exceeds its size limit.");
@@ -91,7 +91,9 @@ internal static class DeskState
         Directory.CreateDirectory(directory);
         var target = Path.Join(directory, filename);
         var temporary = target + ".new";
-        File.WriteAllBytes(temporary, bytes);
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
+        if (OperatingSystem.IsLinux()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var stream = new FileStream(temporary, options)) stream.Write(bytes);
         ct.ThrowIfCancellationRequested();
         File.Move(temporary, target, overwrite: true);
         return true;

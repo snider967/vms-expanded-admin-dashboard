@@ -28,20 +28,29 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
         && IsFresh(cached.SampledAt, 15) ? cached : null;
     internal static bool IsLogName(string name) => name.Length <= 160 && LogName().IsMatch(name);
 
-    internal static async Task<T> Run<T>(
-        SemaphoreSlim gate, TimeSpan timeout, Func<CancellationToken, T> probe, CancellationToken cancellationToken)
+    internal static Task<T> Run<T>(
+        SemaphoreSlim gate, TimeSpan timeout, Func<CancellationToken, T> probe, CancellationToken cancellationToken,
+        bool waitForSlot = false) =>
+        RunAsync(gate, timeout, ct => Task.FromResult(probe(ct)), cancellationToken, waitForSlot);
+
+    internal static async Task<T> RunAsync<T>(
+        SemaphoreSlim gate, TimeSpan timeout, Func<CancellationToken, Task<T>> probe, CancellationToken cancellationToken,
+        bool waitForSlot = false)
     {
-        if (!gate.Wait(0)) throw new DeskProbeBusyException();
+        var acquired = waitForSlot
+            ? await gate.WaitAsync(timeout, cancellationToken)
+            : gate.Wait(0, cancellationToken);
+        if (!acquired) throw new DeskProbeBusyException();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(timeout);
         var token = budget.Token;
         // Kernel I/O can outlive cancellation. Keep the worker slot until actual completion.
-        var work = Task.Run(() =>
+        var work = Task.Run(async () =>
         {
             try
             {
                 token.ThrowIfCancellationRequested();
-                return probe(token);
+                return await probe(token);
             }
             finally
             {
@@ -167,7 +176,7 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
         return new PlaybackTriageReport(DateTimeOffset.UtcNow, recent.ToArray(), catalog.Limited);
     }
 
-    [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error|drop=|speed=",
+    [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error|\bdrop=\s*[1-9]",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex PlaybackSignal();
 
@@ -266,7 +275,7 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
         return age >= TimeSpan.Zero && age < TimeSpan.FromSeconds(seconds);
     }
 
-    [GeneratedRegex(@"\A(?:log(?:[_-][0-9A-Za-z._-]+)?|FFmpeg[._-][0-9A-Za-z._-]+)\.(?:log|txt)\z",
+    [GeneratedRegex(@"\A(?:log(?:[_-][0-9A-Za-z._-]+)?|jellyfin[0-9]{8}|FFmpeg[._-][0-9A-Za-z._-]+)\.(?:log|txt)\z",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex LogName();
 

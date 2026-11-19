@@ -35,6 +35,35 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
         return await RunProbe(DeskProbes.StorageGate, _probes.ReadStorage, cancellationToken);
     }
 
+    [HttpPost("Storage")]
+    public Task<IActionResult> CheckStorage(CancellationToken cancellationToken)
+    {
+        if (!IsAccountAdministrator()) return Task.FromResult<IActionResult>(Forbid());
+        return Respond(async () =>
+        {
+            var result = await DeskProbes.Run(DeskProbes.StorageGate, TimeSpan.FromSeconds(3), _probes.ReadStorage, cancellationToken);
+            if (result.Problem is null)
+                await DeskProbes.Run(DeskProbes.StateGate, TimeSpan.FromSeconds(3),
+                    ct => DashboardSnapshot.UpdateChecks(paths, ct, storage: result), cancellationToken, waitForSlot: true);
+            return result;
+        });
+    }
+
+    [HttpGet("Dashboard")]
+    public Task<IActionResult> Dashboard(CancellationToken cancellationToken)
+    {
+        if (!IsAccountAdministrator()) return Task.FromResult<IActionResult>(Forbid());
+        return RunProbe(DeskProbes.StateGate, ct =>
+        {
+            var checks = DashboardSnapshot.ReadChecks(paths, ct);
+            return new {
+                checks.Storage, checks.Branches, checks.Media,
+                StorageHistory = DashboardSnapshot.MergeStorageHistory(checks, DeskState.ReadDiagnostics(paths, ct)),
+                Charts = DashboardSnapshot.ReadCharts(paths, ct)
+            };
+        }, cancellationToken);
+    }
+
     [HttpGet("Logs")]
     public async Task<IActionResult> Logs(CancellationToken cancellationToken)
     {
@@ -103,6 +132,24 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
             DeskSettings.Effective("RAD_MEDIA_BRANCHES", DeskSettings.Read(paths.DataPath, ct).MediaBranches), ct), cancellationToken);
     }
 
+    [HttpPost("Branches")]
+    public Task<IActionResult> CheckBranches(CancellationToken cancellationToken)
+    {
+        if (!IsAccountAdministrator()) return Task.FromResult<IActionResult>(Forbid());
+        return Respond(async () =>
+        {
+            var settings = await DeskProbes.Run(DeskProbes.StateGate, TimeSpan.FromSeconds(3),
+                ct => DeskSettings.Read(paths.DataPath, ct), cancellationToken);
+            var result = await DeskProbes.Run(DeskProbes.StorageGate, TimeSpan.FromSeconds(3), ct =>
+                new DashboardSnapshot.TimedBranches(DateTimeOffset.UtcNow, _probes.ReadBranches(
+                    DeskSettings.Effective("RAD_MEDIA_BRANCHES", settings.MediaBranches), ct)), cancellationToken);
+            if (result.Result.Problem is null)
+                await DeskProbes.Run(DeskProbes.StateGate, TimeSpan.FromSeconds(3),
+                    ct => DashboardSnapshot.UpdateChecks(paths, ct, branches: result), cancellationToken, waitForSlot: true);
+            return result;
+        });
+    }
+
     [HttpGet("Settings")]
     public async Task<IActionResult> Settings(CancellationToken cancellationToken)
     {
@@ -150,12 +197,15 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
         Guid.TryParse(User.FindFirstValue("Jellyfin-UserId"), out var id) && id != Guid.Empty
         && bool.TryParse(User.FindFirstValue("Jellyfin-IsApiKey"), out var isApiKey) && !isApiKey;
 
-    private async Task<IActionResult> RunProbe<T>(
-        SemaphoreSlim gate, Func<CancellationToken, T> probe, CancellationToken cancellationToken)
+    private Task<IActionResult> RunProbe<T>(
+        SemaphoreSlim gate, Func<CancellationToken, T> probe, CancellationToken cancellationToken) =>
+        Respond(() => DeskProbes.Run(gate, TimeSpan.FromSeconds(3), probe, cancellationToken));
+
+    private async Task<IActionResult> Respond<T>(Func<Task<T>> operation)
     {
         try
         {
-            var result = await DeskProbes.Run(gate, TimeSpan.FromSeconds(3), probe, cancellationToken);
+            var result = await operation();
             return new JsonResult(result, WireFormat);
         }
         catch (DeskProbeBusyException)
