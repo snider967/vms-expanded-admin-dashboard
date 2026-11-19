@@ -22,9 +22,14 @@ public sealed class Plugin : BasePlugin<DeskConfiguration>, IHasWebPages
     internal static string DisplayName { get; } = typeof(Plugin).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
         .Single(metadata => metadata.Key == "PluginDisplayName").Value!;
 
-    public override string Name => DisplayName;
+    internal static readonly Guid PluginId = new("626706cb-1cd6-4f67-94ca-c5b54f297d1d");
 
-    public override Guid Id => new("626706cb-1cd6-4f67-94ca-c5b54f297d1d");
+    private static string IdentityName { get; } = typeof(Plugin).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+        .Single(metadata => metadata.Key == "PluginIdentityName").Value!;
+
+    public override string Name => IdentityName;
+
+    public override Guid Id => PluginId;
 
     public override string Description => "Read-only server, playback, storage, and log diagnostics for Jellyfin.";
 
@@ -40,7 +45,7 @@ public sealed class Plugin : BasePlugin<DeskConfiguration>, IHasWebPages
         };
         yield return new PluginPageInfo
         {
-            Name = "VMS Expanded Admin Dashboard",
+            Name = IdentityName,
             EmbeddedResourcePath = "Jellyfin.Plugin.RemoteAdminDesk.Pages.desk.html"
         };
     }
