@@ -32,15 +32,25 @@ public sealed class DeskRoutes : IPluginServiceRegistrator
         }
 
         var olderCopies = copies.Where(plugin => plugin.Version < current.Version).ToArray();
-        // Jellyfin's updater considers superseded copies. An explicit Disabled state
-        // is preserved on catalog refresh and keeps older copies out of future updates.
-        foreach (var older in olderCopies.Where(plugin => plugin.Manifest.Status is PluginStatus.Active or PluginStatus.Superseded
-            || (plugin.Manifest.Status == PluginStatus.Disabled && plugin.Name == Plugin.DisplayName)))
+        foreach (var older in olderCopies)
         {
+            var standardInstallation = (older.Name == Plugin.IdentityName || older.Name == Plugin.DisplayName)
+                && IsVersionedSibling(older, current);
+            if (older.Manifest.Status == PluginStatus.Disabled)
+            {
+                // Jellyfin removes the retired folder and its in-memory UI record.
+                if (older.Instance is null && standardInstallation)
+                    manager.RemovePlugin(older);
+                continue;
+            }
+            if (older.Manifest.Status is not (PluginStatus.Active or PluginStatus.Superseded))
+                continue;
+
+            // Jellyfin's updater considers superseded copies. A Disabled state keeps
+            // them out of future updates, and standard folders can retire next boot.
             older.Manifest.Status = PluginStatus.Disabled;
-            // Jellyfin Web prioritizes disabled versions with the same ID. Matching the
-            // current manifest name lets Jellyfin retire this stale record on its next boot.
-            older.Manifest.Name = Plugin.IdentityName;
+            if (standardInstallation)
+                older.Manifest.Name = Plugin.IdentityName;
             try
             {
                 manager.SaveManifest(older.Manifest, older.Path);
@@ -51,6 +61,18 @@ public sealed class DeskRoutes : IPluginServiceRegistrator
             }
         }
         return olderCopies.Any(plugin => plugin.DllFiles.Count != 0);
+    }
+
+    private static bool IsVersionedSibling(LocalPlugin older, LocalPlugin current)
+    {
+        var directory = new DirectoryInfo(older.Path);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var currentDirectory = new DirectoryInfo(current.Path);
+        return directory.Parent is not null && directory.Parent.FullName.Equals(currentDirectory.Parent?.FullName, comparison)
+            && !directory.FullName.Equals(currentDirectory.FullName, comparison)
+            && (directory.Name.Equals(Plugin.IdentityName + "_" + older.Version, comparison)
+                || directory.Name.Equals(Plugin.DisplayName + "_" + older.Version, comparison))
+            && directory.Exists && !directory.Attributes.HasFlag(FileAttributes.ReparsePoint);
     }
 
     private sealed class PreferNewestController : IApplicationModelConvention
