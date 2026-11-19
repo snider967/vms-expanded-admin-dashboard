@@ -24,7 +24,7 @@ ABI = SERVER_VERSION + ".0"
 SDK = PROPERTIES.findtext("TargetFramework").removeprefix("net")
 DISPLAY_NAME = PROPERTIES.findtext("PluginDisplayName")
 DLL = "Jellyfin.Plugin.RemoteAdminDesk.dll"
-PACKAGE = "-".join(DISPLAY_NAME.split()) + f"-{VERSION}.zip"
+PACKAGE = re.sub(r"[^A-Za-z0-9]+", "-", DISPLAY_NAME).strip("-") + f"-{VERSION}.zip"
 GUID = "626706cb-1cd6-4f67-94ca-c5b54f297d1d"
 TAG = f"v{VERSION}"
 
