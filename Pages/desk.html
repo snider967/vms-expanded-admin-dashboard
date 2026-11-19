@@ -262,6 +262,14 @@
                     <div class="rad-top"><h2>Discord delivery</h2><button is="emby-button" type="button" class="raised" data-desk="read-notifications">Check notification status</button></div>
                     <p class="rad-muted" data-desk="notification-status" role="status">View webhook readiness, last delivery, and pending media alerts.</p>
                     <ul class="rad-data" data-desk="notification-channels"></ul>
+                    <div class="rad-top">
+                        <button is="emby-button" type="button" class="raised" data-desk="test-diagnostics">Send diagnostics test</button>
+                        <p class="rad-muted" data-desk="diagnostics-test-status" role="status"></p>
+                    </div>
+                    <div class="rad-top">
+                        <button is="emby-button" type="button" class="raised" data-desk="test-media">Send media test</button>
+                        <p class="rad-muted" data-desk="media-test-status" role="status"></p>
+                    </div>
                     <p class="rad-muted">Configure channels in Settings. Delivery intervals are managed in Jellyfin Scheduled Tasks.</p>
                 </section>
             </div>
@@ -653,7 +661,8 @@ const DeskAnalysis = (() => {
             });
         }
         const actionButtons = ["refresh", "read-storage", "read-additions", "read-usage", "read-logs", "read-tail",
-            "read-notifications", "read-imports", "read-import-history", "read-branches", "read-triage", "read-history", "read-settings"];
+            "read-notifications", "test-diagnostics", "test-media", "read-imports", "read-import-history",
+            "read-branches", "read-triage", "read-history", "read-settings"];
         const secretFields = [
             ["settings-diagnostics", "diagnosticsWebhook"], ["settings-media", "mediaWebhook"],
             ["settings-sonarr", "sonarrKey"], ["settings-radarr", "radarrKey"]
@@ -1388,6 +1397,19 @@ const DeskAnalysis = (() => {
             }));
         }
 
+        const discordDeliveryLabels = {
+            delivered: "Delivered", timeout: "Timed out", "rate-limited": "Rate limited",
+            rejected: "Discord rejected the request", invalid: "Webhook format invalid",
+            unreachable: "Discord unreachable", missing: "Webhook unset"
+        };
+
+        async function testNotification(channel) {
+            const output = channel + "-test-status";
+            status(output, "Sending test…");
+            const result = await read("RemoteAdminDesk/Notifications/Test/" + channel, undefined, 4096, undefined, "POST");
+            status(output, (discordDeliveryLabels[result.status] || "Unknown test result") + " · " + formatDate(result.testedAt));
+        }
+
         async function readNotifications(saved) {
             if (!saved) {
                 status("notification-status", "Reading local delivery history…");
@@ -1395,17 +1417,13 @@ const DeskAnalysis = (() => {
             }
             const result = saved.result;
             const configuration = { missing: "Webhook unset", invalid: "Webhook format invalid", configured: "Webhook configured" };
-            const delivery = {
-                delivered: "Delivered", timeout: "Timed out", "rate-limited": "Rate limited",
-                rejected: "Discord rejected the request", invalid: "Webhook format invalid", unreachable: "Discord unreachable"
-            };
             const channels = [["Diagnostic alerts", result.diagnostics], ["New movies and episodes", result.media]];
             setList("notification-channels", channels.map(([name, channel]) => {
                 const event = channel.delivery;
                 return row(name, [
                     configuration[channel.configuration] || "Configuration unknown",
                     channel.lastScanAt ? "Last scan " + formatDate(channel.lastScanAt) : "No recorded scan",
-                    event ? (delivery[event.status] || "Delivery status unknown") + " at " + formatDate(event.attemptedAt)
+                    event ? (discordDeliveryLabels[event.status] || "Delivery status unknown") + " at " + formatDate(event.attemptedAt)
                         : "No delivery attempted",
                     event?.deliveredAt && event.status !== "delivered" ? "Last success " + formatDate(event.deliveredAt) : null
                 ].filter(Boolean).join(" · "));
@@ -1508,6 +1526,8 @@ const DeskAnalysis = (() => {
             status("additions", "Movies and episodes indexed by Jellyfin.");
             status("log-status", "Check Jellyfin server and FFmpeg logs for recurring errors.");
             status("notification-status", "View webhook readiness, last delivery, and pending media alerts.");
+            status("diagnostics-test-status", "");
+            status("media-test-status", "");
             status("overview-history-status", "View successful logins, connected sessions, and stream starts from recorded Jellyfin activity.");
             status("branch-status", "Check free space and detect missing configured branch mounts.");
             status("triage-status", "Compare recent FFmpeg evidence with the current streams above.");
@@ -1583,6 +1603,8 @@ const DeskAnalysis = (() => {
             ["read-storage", "storage", readStorage], ["read-additions", "additions", readAdditions],
             ["read-usage", "usage", readUsage], ["read-logs", "log-status", readLogs], ["read-tail", "log-status", readTail],
             ["read-notifications", "notification-status", readNotifications], ["read-branches", "branch-status", readBranches],
+            ["test-diagnostics", "diagnostics-test-status", () => testNotification("diagnostics")],
+            ["test-media", "media-test-status", () => testNotification("media")],
             ["read-triage", "triage-status", readTriage], ["read-imports", "import-status", readImports],
             ["read-import-history", "import-history-status", readImportHistory],
             ["read-history", "overview-history-status", readUsage], ["read-settings", "settings-status", readSettings]
