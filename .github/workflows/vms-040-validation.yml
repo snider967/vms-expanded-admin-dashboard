@@ -1,0 +1,35 @@
+name: Validate VMS 0.4.0.0 upgrade
+on:
+  push:
+    branches: [vms-0.4-validation]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Build and test candidate
+        run: |
+          unzip -o vms-040-candidate.zip
+          node --test tests/dashboard.test.cjs
+          python3 -m unittest discover -s tests -v
+          python3 Scripts/build-release.py --out dist --validate-tag v0.4.0.0
+      - name: Obtain pinned Jellyfin and previous release
+        run: |
+          curl -fsSL --retry 2 -o jellyfin.txz https://ams1.mirror.jellyfin.org/files/server/linux/latest-stable/amd64/jellyfin_12.4-amd64.tar.xz
+          echo '29831bfda5699018d1d3058085c6b837fb31da34b5eab3c98259aa12da80375f  jellyfin.txz' | sha256sum -c -
+          curl -fsSL --retry 2 -o ffmpeg.deb https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v8.1.3-2/jellyfin-ffmpeg8_8.1.3-2-noble_amd64.deb
+          echo '22e3bbb6ca67f4d7badb16ae4a3c677940b97cb76eb273af7d70f6cb2b9b62bf  ffmpeg.deb' | sha256sum -c -
+          curl -fsSL --retry 2 -o baseline.zip https://github.com/snider967/vms-expanded-admin-dashboard/releases/download/v0.3.0.0/VMS-Admin-Ext-Dash-0.3.0.0.zip
+          echo '0c2f90fe6f3cb4da28f6d79123dbd28044a349681225165637ce5e9c4245f1eb  baseline.zip' | sha256sum -c -
+          tar -xJf jellyfin.txz
+          dpkg-deb -x ffmpeg.deb ffmpeg
+      - name: Exercise Jellyfin catalog upgrade and restart
+        run: python3 vms-040-upgrade.py
