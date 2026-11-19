@@ -164,6 +164,9 @@ public sealed class ScheduledMediaAlerts(
     ILibraryManager library, IApplicationPaths paths, ILogger<ScheduledMediaAlerts> logger) : IScheduledTask
 {
     private const int QueryLimit = 120;
+    private const int MaxPagesPerRun = 8;
+    private const int MaxMessagesPerRun = 12;
+    private const int MessageItems = 14;
     private static readonly SemaphoreSlim JobGate = new(1, 1);
     private static readonly SemaphoreSlim QueryGate = new(1, 1);
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
@@ -193,37 +196,34 @@ public sealed class ScheduledMediaAlerts(
                 return;
             }
             progress.Report(60);
-            var known = previous?.Known.ToHashSet();
-            var cutoff = previous?.OldestDate ?? DateTimeOffset.MinValue;
-            MediaItem[] added = known is null ? [] : current.Where(item => !known.Contains(item.Id)
-                && item.Date >= cutoff).Reverse().ToArray();
-            if (current.Length == QueryLimit && previous is not null && current.All(item => !known!.Contains(item.Id)))
-                logger.LogWarning("VMS Expanded Admin Dashboard media coverage was capped. The two latest-item samples did not overlap.");
-
-            var currentIds = current.Select(item => item.Id).ToHashSet();
-            var ids = (previous?.Known ?? []).Where(id => !currentIds.Contains(id))
-                .Concat(current.Reverse().Select(item => item.Id)).TakeLast(512).ToArray();
-            var oldest = current.Length == QueryLimit ? current[^1].Date : (DateTimeOffset?)null;
-            var pending = (previous?.Pending ?? []).Concat(added.Select(item => item.Title)).ToArray();
-            var next = pending.Length > 240
-                ? previous! // Leave the query baseline untouched while the existing queue drains.
-                : new DeskState.Media(ids, oldest, pending, DateTimeOffset.UtcNow, previous?.Discord);
-            await Save(next, cancellationToken);
-
-            var batch = next.Pending.Take(14).ToArray();
-            if (batch.Length > 0)
+            var state = previous ?? new DeskState.Media([], null, [], sampledAt, Cursor: sampledAt);
+            state = await FlushReceipt(state, cancellationToken);
+            if (state.Cursor is null)
             {
-                var content = "VMS · New in Jellyfin · " + batch.Length + " movie(s) and episode(s)\n"
-                    + string.Join("\n", batch.Select(title => "• " + title));
-                var result = await DeskDiscord.Send(webhook, content, cancellationToken);
-                var delivery = DeskState.RecordDelivery(next.Discord, result);
-                if (result != DeskDiscord.Delivered)
+                // Migrate the recorded scan cutoff and retain the old IDs and pending messages.
+                state = state with { Cursor = state.LastScanAt ?? sampledAt };
+            }
+            state = state with { ScanThrough = state.ScanThrough ?? sampledAt };
+            await Save(state, cancellationToken);
+
+            var pages = 0;
+            var messages = 0;
+            while (true)
+            {
+                if (state.QueuedCount != 0 && messages < MaxMessagesPerRun)
                 {
-                    await Save(next with { Discord = delivery }, cancellationToken);
-                    logger.LogWarning("VMS Expanded Admin Dashboard could not deliver its Discord media notification.");
-                    throw new InvalidOperationException("Discord media delivery failed.");
+                    state = await Deliver(state, webhook, cancellationToken);
+                    messages++;
                 }
-                await Save(next with { Pending = next.Pending.Skip(batch.Length).ToArray(), Discord = delivery }, cancellationToken);
+                if (state.ScanThrough is not null && pages < MaxPagesPerRun && state.QueuedCount < DeskState.MediaQueueLimit)
+                {
+                    state = await ScanPage(state, cancellationToken);
+                    pages++;
+                }
+                else if (state.QueuedCount == 0 || messages >= MaxMessagesPerRun)
+                {
+                    break;
+                }
             }
             await SaveDashboard(media, cancellationToken);
             progress.Report(100);
@@ -232,6 +232,86 @@ public sealed class ScheduledMediaAlerts(
         {
             JobGate.Release();
         }
+    }
+
+    private async Task<DeskState.Media> ScanPage(DeskState.Media state, CancellationToken ct)
+    {
+        var cutoff = state.Cursor!.Value;
+        var through = state.ScanThrough!.Value;
+        var limit = Math.Min(QueryLimit, DeskState.MediaQueueLimit - state.QueuedCount);
+        var boundary = state.CursorIds ?? [];
+        var page = await DeskProbes.Run(QueryGate, Budget, token =>
+            ReadItems(token, limit, cutoff, boundary), ct);
+        var items = page.Where(item => item.Date <= through).ToArray();
+        var complete = page.Length < limit || items.Length < page.Length;
+
+        // Advance the cursor only alongside the queued page. Excluding IDs at the
+        // inclusive boundary avoids offset races and handles equal timestamps.
+        var cursor = complete ? through : items[^1].Date;
+        var cursorIds = (cursor == cutoff ? boundary : []).Concat(
+            items.Where(item => item.Date == cursor).Select(item => item.Id)).Distinct().ToArray();
+        if (cursorIds.Length > DeskState.MediaBoundaryLimit)
+            throw new IOException("The media scan has too many items at one timestamp.");
+        var legacy = state.Known.ToHashSet();
+        var alerts = items.Where(item => !legacy.Contains(item.Id))
+            .Select(item => new DeskState.MediaAlert(item.Id, item.Title));
+        var next = state with
+        {
+            Cursor = cursor, CursorIds = cursorIds, ScanThrough = complete ? null : through,
+            LastScanAt = complete ? through : state.LastScanAt,
+            Outbox = (state.Outbox ?? []).Concat(alerts).ToArray()
+        };
+        await Save(next, ct);
+        return next;
+    }
+
+    private async Task<DeskState.Media> Deliver(DeskState.Media state, string webhook, CancellationToken ct)
+    {
+        var legacy = state.Pending.Take(MessageItems).ToArray();
+        var queued = (state.Outbox ?? []).Take(MessageItems - legacy.Length).ToArray();
+        var delivered = await DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
+            DeskState.ReadDeliveredMedia(paths, queued.Select(item => item.Id), token), ct, waitForSlot: true);
+        var unsent = queued.Where(item => !delivered.Contains(item.Id)).DistinctBy(item => item.Id).ToArray();
+        var titles = legacy.Concat(unsent.Select(item => item.Title)).ToArray();
+        var next = state with
+        {
+            Pending = state.Pending.Skip(legacy.Length).ToArray(),
+            Outbox = (state.Outbox ?? []).Skip(queued.Length).ToArray()
+        };
+        if (titles.Length == 0)
+        {
+            await Save(next, ct);
+            return next;
+        }
+
+        var content = "VMS · New in Jellyfin · " + titles.Length + " movie(s) and episode(s)\n"
+            + string.Join("\n", titles.Select(title => "• " + title));
+        var status = await DeskDiscord.Send(webhook, content, ct);
+        var delivery = DeskState.RecordDelivery(state.Discord, status);
+        if (status != DeskDiscord.Delivered)
+        {
+            await Save(state with { Discord = delivery }, ct);
+            logger.LogWarning("VMS Expanded Admin Dashboard could not deliver its Discord media notification.");
+            throw new InvalidOperationException("Discord media delivery failed.");
+        }
+
+        // Discord has acknowledged the request. Finish recording it even if the
+        // scheduled task was cancelled while that response was in flight.
+        next = next with { Discord = delivery, DeliveryReceipt = unsent.Select(item => item.Id).ToArray() };
+        await Save(next, CancellationToken.None);
+        return await FlushReceipt(next, CancellationToken.None);
+    }
+
+    private async Task<DeskState.Media> FlushReceipt(DeskState.Media state, CancellationToken ct)
+    {
+        if (state.DeliveryReceipt is not { Length: > 0 } receipt) return state;
+        var next = state with { DeliveryReceipt = null };
+        await DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
+        {
+            DeskState.RecordDeliveredMedia(paths, receipt, token);
+            return DeskState.SaveMedia(paths, next, token);
+        }, ct, waitForSlot: true);
+        return next;
     }
 
     private Task<bool> Save(DeskState.Media state, CancellationToken ct) =>
@@ -253,7 +333,9 @@ public sealed class ScheduledMediaAlerts(
         return new DashboardSnapshot.MediaHistory(sampledAt, items.Length == QueryLimit ? items[^1].Date : null, days);
     }
 
-    private MediaItem[] ReadLatest(CancellationToken ct)
+    private MediaItem[] ReadLatest(CancellationToken ct) => ReadItems(ct, QueryLimit);
+
+    private MediaItem[] ReadItems(CancellationToken ct, int limit, DateTimeOffset? cutoff = null, Guid[]? excluded = null)
     {
         var items = library.GetItemList(new InternalItemsQuery
         {
@@ -261,8 +343,10 @@ public sealed class ScheduledMediaAlerts(
             IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Episode],
             IsVirtualItem = false,
             EnableTotalRecordCount = false,
-            Limit = QueryLimit,
-            OrderBy = [(ItemSortBy.DateCreated, SortOrder.Descending)]
+            Limit = limit,
+            MinDateCreated = cutoff?.UtcDateTime,
+            ExcludeItemIds = excluded ?? [],
+            OrderBy = [(ItemSortBy.DateCreated, cutoff is null ? SortOrder.Descending : SortOrder.Ascending)]
         });
         ct.ThrowIfCancellationRequested();
         return items.Select(item =>
@@ -298,7 +382,7 @@ internal static partial class DeskDiscord
     {
         var uri = ParseWebhook(webhook);
         if (uri is null) return "invalid";
-        using var request = new HttpRequestMessage(HttpMethod.Post, uri)
+        using var request = new HttpRequestMessage(HttpMethod.Post, new UriBuilder(uri) { Query = "wait=true" }.Uri)
         {
             Content = JsonContent.Create(new
             {

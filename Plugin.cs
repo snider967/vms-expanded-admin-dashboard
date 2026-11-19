@@ -24,7 +24,7 @@ public sealed class Plugin : BasePlugin<DeskConfiguration>, IHasWebPages
 
     internal static readonly Guid PluginId = new("626706cb-1cd6-4f67-94ca-c5b54f297d1d");
 
-    private static string IdentityName { get; } = typeof(Plugin).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+    internal static string IdentityName { get; } = typeof(Plugin).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
         .Single(metadata => metadata.Key == "PluginIdentityName").Value!;
 
     public override string Name => IdentityName;

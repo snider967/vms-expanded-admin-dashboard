@@ -18,6 +18,7 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
     private static readonly string? JellyfinVersion = typeof(DiagnosticsController).Assembly
         .GetCustomAttributes<AssemblyMetadataAttribute>().FirstOrDefault(item => item.Key == "JellyfinVersion")?.Value;
     private readonly DeskProbes _probes = new(library, paths);
+    private static readonly SemaphoreSlim WebhookTestGate = new(1, 1);
 
     [HttpGet("Access")]
     public IActionResult Access()
@@ -95,6 +96,35 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
     {
         if (!IsAccountAdministrator()) return Forbid();
         return await RunProbe(DeskProbes.StateGate, ct => DeskState.ReadNotifications(paths, ct), cancellationToken);
+    }
+
+    [HttpPost("Notifications/Test/{channel}")]
+    public Task<IActionResult> TestNotification(string channel, CancellationToken ct)
+    {
+        if (!IsAccountAdministrator()) return Task.FromResult<IActionResult>(Forbid());
+        if (channel is not ("diagnostics" or "media")) return Task.FromResult<IActionResult>(NotFound());
+        return Respond(async () =>
+        {
+            if (!WebhookTestGate.Wait(0, ct)) throw new DeskProbeBusyException();
+            try
+            {
+                var settings = await DeskProbes.Run(DeskProbes.StateGate, TimeSpan.FromSeconds(3),
+                    token => DeskSettings.Read(paths.DataPath, token), ct, waitForSlot: true);
+                var diagnostics = channel == "diagnostics";
+                var webhook = diagnostics
+                    ? DeskSettings.Effective(DeskDiscord.DiagnosticsVariable, settings.DiagnosticsWebhook)
+                    : DeskSettings.Effective(DeskDiscord.MediaVariable, settings.MediaWebhook);
+                var label = diagnostics ? "Diagnostics" : "New movies and TV";
+                var status = DeskDiscord.Configuration(webhook) == "missing"
+                    ? "missing"
+                    : await DeskDiscord.Send(webhook, "VMS · " + label + " webhook test", ct);
+                return new { status, testedAt = DateTimeOffset.UtcNow };
+            }
+            finally
+            {
+                WebhookTestGate.Release();
+            }
+        });
     }
 
     [HttpGet("Imports")]

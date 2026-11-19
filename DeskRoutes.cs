@@ -34,10 +34,13 @@ public sealed class DeskRoutes : IPluginServiceRegistrator
         var olderCopies = copies.Where(plugin => plugin.Version < current.Version).ToArray();
         // Jellyfin's updater considers superseded copies. An explicit Disabled state
         // is preserved on catalog refresh and keeps older copies out of future updates.
-        foreach (var older in olderCopies.Where(plugin => plugin.Manifest.Status
-            is PluginStatus.Active or PluginStatus.Superseded))
+        foreach (var older in olderCopies.Where(plugin => plugin.Manifest.Status is PluginStatus.Active or PluginStatus.Superseded
+            || (plugin.Manifest.Status == PluginStatus.Disabled && plugin.Name == Plugin.DisplayName)))
         {
             older.Manifest.Status = PluginStatus.Disabled;
+            // Jellyfin Web prioritizes disabled versions with the same ID. Matching the
+            // current manifest name lets Jellyfin retire this stale record on its next boot.
+            older.Manifest.Name = Plugin.IdentityName;
             try
             {
                 manager.SaveManifest(older.Manifest, older.Path);

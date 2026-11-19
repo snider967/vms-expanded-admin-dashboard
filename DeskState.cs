@@ -14,8 +14,16 @@ internal static class DeskState
     internal sealed record Delivery(DateTimeOffset AttemptedAt, DateTimeOffset? DeliveredAt, string Status);
     internal sealed record Diagnostics(Sample[] Samples, string[] Delivered, bool? StorageWarning, DateTimeOffset? LastScanAt,
         Delivery? Discord = null, bool? MountWarning = null);
+    internal const int MediaQueueLimit = 240;
+    internal const int MediaBoundaryLimit = 12000;
+    internal sealed record MediaAlert(Guid Id, string Title);
     internal sealed record Media(Guid[] Known, DateTimeOffset? OldestDate, string[] Pending,
-        DateTimeOffset? LastScanAt = null, Delivery? Discord = null);
+        DateTimeOffset? LastScanAt = null, Delivery? Discord = null, DateTimeOffset? Cursor = null,
+        Guid[]? CursorIds = null, DateTimeOffset? ScanThrough = null, MediaAlert[]? Outbox = null,
+        Guid[]? DeliveryReceipt = null)
+    {
+        public int QueuedCount => Pending.Length + (Outbox?.Length ?? 0);
+    }
     internal sealed record NotificationChannel(string Configuration, DateTimeOffset? LastScanAt, Delivery? Delivery);
     internal sealed record NotificationStatus(NotificationChannel Diagnostics, NotificationChannel Media, int PendingMedia, bool MediaBaseline);
 
@@ -29,7 +37,7 @@ internal static class DeskState
                 settings.DiagnosticsWebhook)), diagnostics.LastScanAt, diagnostics.Discord),
             new NotificationChannel(DeskDiscord.Configuration(DeskSettings.Effective(DeskDiscord.MediaVariable,
                 settings.MediaWebhook)), media?.LastScanAt, media?.Discord),
-            media?.Pending.Length ?? 0, media is not null);
+            media?.QueuedCount ?? 0, media is not null);
     }
 
     internal static Delivery RecordDelivery(Delivery? previous, string status)
@@ -51,7 +59,8 @@ internal static class DeskState
     {
         var state = Read<Media>(paths, MediaFile, ct);
         if (state is not null && (state.Known is null || state.Known.Length > 512
-            || state.Pending is null || state.Pending.Length > 240))
+            || state.Pending is null || state.QueuedCount > MediaQueueLimit || state.CursorIds?.Length > MediaBoundaryLimit
+            || state.DeliveryReceipt?.Length > 14))
             throw new JsonException("Remote Admin Desk media state is invalid.");
         return state;
     }
@@ -60,6 +69,18 @@ internal static class DeskState
         Save(paths, DiagnosticFile, data, ct);
     internal static bool SaveMedia(IApplicationPaths paths, Media data, CancellationToken ct) =>
         Save(paths, MediaFile, data, ct);
+
+    private static string DeliveryShard(Guid id) => "media-delivered-" + id.ToString("N")[..2] + ".json";
+
+    internal static HashSet<Guid> ReadDeliveredMedia(IApplicationPaths paths, IEnumerable<Guid> ids, CancellationToken ct) =>
+        ids.GroupBy(DeliveryShard).SelectMany(group =>
+            (Read<Guid[]>(paths, group.Key, ct) ?? []).Intersect(group)).ToHashSet();
+
+    internal static void RecordDeliveredMedia(IApplicationPaths paths, IEnumerable<Guid> ids, CancellationToken ct)
+    {
+        foreach (var group in ids.GroupBy(DeliveryShard))
+            Save(paths, group.Key, (Read<Guid[]>(paths, group.Key, ct) ?? []).Union(group).ToArray(), ct);
+    }
 
     private static string StateDirectory(IApplicationPaths paths) => Path.Join(paths.DataPath, "remote-admin-desk");
 
