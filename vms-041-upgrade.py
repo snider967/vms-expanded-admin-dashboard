@@ -189,7 +189,7 @@ class Lab:
 
     def confirm_legacy_loaded(self):
         text = (self.root / f"console-{self.launches}.log").read_text()
-        assert 'Loaded plugin: "VMS Expanded Admin Dashboard" "0.2.0.0"' in text, "Legacy plugin not loaded"
+        assert "Loaded plugin: VMS Expanded Admin Dashboard 0.2.0.0" in text.replace('"', ""), "Legacy plugin not loaded"
 
     def reproduce(self):
         self.confirm_legacy_loaded()
