@@ -8,7 +8,7 @@ Three Jellyfin tasks support independent schedules. The Diagnostic Scan samples 
 
 ## Release status
 
-`0.3.0.0` adds the saved Overview, live playback refresh, a new dashboard icon, and bounded waiting when the scheduled scans share the state lock. The plugin ID, settings file, and existing scheduled-task identities carry forward from `0.2.0.0`.
+`0.4.0.0` adds on-demand Import History under Imports. The plugin ID, settings file, and three scheduled-task identities carry forward from `0.3.0.0`.
 
 ## Build and use in staging
 
@@ -42,7 +42,9 @@ Seerr has a built-in **Settings → Notifications → Discord** agent. Use the p
 
 ## Optional import and branch diagnostics
 
-Enter Sonarr and Radarr API keys in Settings on Linux, or set `RAD_SONARR_API_KEY` and `RAD_RADARR_API_KEY` in the private Jellyfin service environment. VMS only issues a queue GET to Sonarr on `127.0.0.1:8989` and Radarr on `127.0.0.1:7878`. The upstream keys may grant broader rights and should stay private on the host. This initial integration assumes both services share Jellyfin's network namespace and use their default ports and base paths.
+Enter Sonarr and Radarr API keys in Settings on Linux, or set `RAD_SONARR_API_KEY` and `RAD_RADARR_API_KEY` in the private Jellyfin service environment. VMS issues read-only queue and history GET requests to Sonarr on `127.0.0.1:8989` and Radarr on `127.0.0.1:7878`. The upstream keys may grant broader rights and should stay private on the host. Both services must share Jellyfin's network namespace and use their default ports and base paths.
+
+**Check import history** reads up to 20 recent grab, import, failure, and ignored-download events per service. Imported paths are compared by exact match against up to 120 recently indexed Jellyfin movies and episodes. If the file falls outside that sample or the services use different paths, VMS shows that it could not confirm a match. Grab events indicate release selection. Arr import events have their own timestamps, and exact downloader completion times are still unavailable.
 
 Enter expected branch mount points in Settings as a colon-separated list, or set `RAD_MEDIA_BRANCHES` in the service environment. For example, `/mnt/media-a:/mnt/media-b`. The branch view reads up to eight expected mount points, reports a missing mount even when its underlying directory still exists, and keeps branch numbers separate from union capacity. The diagnostic task can flag missing and recovered mounts when Discord is configured.
 

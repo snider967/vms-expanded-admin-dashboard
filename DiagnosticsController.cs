@@ -98,14 +98,22 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
     }
 
     [HttpGet("Imports")]
-    public async Task<IActionResult> Imports(CancellationToken cancellationToken)
+    public Task<IActionResult> Imports(CancellationToken cancellationToken) =>
+        ReadArr(ArrQueue.Read, cancellationToken);
+
+    [HttpGet("ImportHistory")]
+    public Task<IActionResult> ImportHistory(CancellationToken cancellationToken) =>
+        ReadArr((settings, ct) => ArrHistory.Read(settings, library, ct), cancellationToken);
+
+    private async Task<IActionResult> ReadArr<T>(Func<DeskSettings.Values, CancellationToken, Task<T>> read,
+        CancellationToken cancellationToken)
     {
         if (!IsAccountAdministrator()) return Forbid();
         try
         {
             var saved = await DeskProbes.Run(DeskProbes.StateGate, TimeSpan.FromSeconds(3),
                 ct => DeskSettings.Read(paths.DataPath, ct), cancellationToken);
-            return new JsonResult(await ArrQueue.Read(saved, cancellationToken), WireFormat);
+            return new JsonResult(await read(saved, cancellationToken), WireFormat);
         }
         catch (DeskProbeBusyException)
         {
