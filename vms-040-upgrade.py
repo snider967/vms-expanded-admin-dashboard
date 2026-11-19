@@ -124,6 +124,8 @@ class Lab:
                 def ready():
                     if process.poll() is not None:
                         raise RuntimeError(f"Jellyfin exited with {process.returncode}")
+                    if "Startup complete" not in log_path.read_text():
+                        return False
                     try:
                         info = call("/System/Info/Public")
                     except (OSError, RuntimeError):
