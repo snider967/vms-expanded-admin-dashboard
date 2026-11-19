@@ -32,11 +32,16 @@ public sealed class Plugin : BasePlugin<DeskConfiguration>, IHasWebPages
     {
         yield return new PluginPageInfo
         {
-            Name = "VMS Expanded Admin Dashboard",
+            Name = DisplayName,
             DisplayName = DisplayName,
             MenuIcon = "dashboard",
             EmbeddedResourcePath = "Jellyfin.Plugin.RemoteAdminDesk.Pages.desk.html",
             EnableInMainMenu = true
+        };
+        yield return new PluginPageInfo
+        {
+            Name = "VMS Expanded Admin Dashboard",
+            EmbeddedResourcePath = "Jellyfin.Plugin.RemoteAdminDesk.Pages.desk.html"
         };
     }
 }
