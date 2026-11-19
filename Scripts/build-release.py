@@ -23,6 +23,7 @@ SERVER_VERSION = PROPERTIES.findtext("JellyfinVersion")
 ABI = SERVER_VERSION + ".0"
 SDK = PROPERTIES.findtext("TargetFramework").removeprefix("net")
 DISPLAY_NAME = PROPERTIES.findtext("PluginDisplayName")
+IDENTITY_NAME = PROPERTIES.findtext("PluginIdentityName")
 DLL = "Jellyfin.Plugin.RemoteAdminDesk.dll"
 PACKAGE = re.sub(r"[^A-Za-z0-9]+", "-", DISPLAY_NAME).strip("-") + f"-{VERSION}.zip"
 GUID = "626706cb-1cd6-4f67-94ca-c5b54f297d1d"
@@ -89,6 +90,17 @@ def main():
         archive = args.out / PACKAGE
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
             zipped.write(target / DLL, DLL)
+            # Jellyfin groups older installations by local manifest name before loading assemblies.
+            zipped.writestr("meta.json", json.dumps({
+                "guid": GUID,
+                "name": IDENTITY_NAME,
+                "version": VERSION,
+                "targetAbi": ABI,
+                "status": "Active",
+                "autoUpdate": True,
+                "assemblies": [DLL],
+                "imagePath": "",
+            }) + "\n")
         binary = archive.read_bytes()
         (args.out / (PACKAGE + ".sha256")).write_text(hashlib.sha256(binary).hexdigest() + "  " + PACKAGE + "\n")
         if args.archive_url:
