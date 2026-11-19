@@ -1,6 +1,5 @@
 """Disposable Jellyfin 12.4 catalog test. All server and Arr traffic stays on loopback."""
 import contextlib
-import datetime
 import hashlib
 import http.server
 import json
@@ -35,7 +34,7 @@ def call(route, body=MISSING, token=None, method=None):
             raw = response.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"{req.method} {route} returned HTTP {error.code}") from None
+        raise RuntimeError(f"{req.get_method()} {route} returned HTTP {error.code}") from None
 
 
 def wait(check, label, seconds=45):
@@ -176,16 +175,20 @@ class Lab:
         self.post("/Startup/RemoteAccess", {"EnableRemoteAccess": False, "EnableAutomaticPortMapping": False})
         self.post("/Startup/Complete")
         self.token = self.post("/Users/AuthenticateByName", {"Username": username, "Pw": password})["AccessToken"]
+        print("Disposable Jellyfin initialized.", flush=True)
         self.post("/Repositories", [{"Name": "Local validation feed", "Url": f"{FEED}/manifest.json", "Enabled": True}])
         query = urllib.parse.urlencode({"assemblyGuid": PLUGIN, "version": "0.3.0.0"})
         self.post("/Packages/Installed/" + urllib.parse.quote(NAME) + "?" + query)
         wait(lambda: any(p["Version"] == "0.3.0.0" for p in self.plugins()), "catalog baseline install")
+        print("Published 0.3.0.0 baseline installed from test catalog.", flush=True)
 
     def setup_upgrade(self):
         assert self.plugins()[0]["Version"] == "0.3.0.0"
         self.get("/RemoteAdminDesk/Access")
         values = {"sonarrKey": "syntheticSonarr", "radarrKey": "syntheticRadarr",
-                  "mediaBranches": "/mnt/synthetic"}
+                  "mediaBranches": "/mnt/synthetic",
+                  "diagnosticsWebhook": "https://discord.com/api/webhooks/000000000000000000/" + "A" * 40,
+                  "mediaWebhook": "https://discord.com/api/webhooks/000000000000000001/" + "B" * 40}
         call("/RemoteAdminDesk/Settings", values, self.token, "PUT")
         for key, ticks in TASK_TIMES.items():
             self.post(f'/ScheduledTasks/{self.tasks()[key]["Id"]}/Triggers',
