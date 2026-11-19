@@ -24,6 +24,14 @@ TASK_TIMES = {"RemoteAdminDeskScan": 72000000000, "RemoteAdminDeskMedia": 810000
 MISSING = object()
 
 
+def normalized(value):
+    if isinstance(value, dict):
+        return {key[0].upper() + key[1:]: normalized(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalized(item) for item in value]
+    return value
+
+
 def call(route, body=MISSING, token=None, method=None):
     data = None if body is MISSING else json.dumps(body).encode()
     req = urllib.request.Request(BASE + route, data=data, method=method,
@@ -32,7 +40,7 @@ def call(route, body=MISSING, token=None, method=None):
     try:
         with urllib.request.urlopen(req, timeout=8) as response:
             raw = response.read()
-            return json.loads(raw) if raw else None
+            return normalized(json.loads(raw)) if raw else None
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"{req.get_method()} {route} returned HTTP {error.code}") from None
 
@@ -198,12 +206,12 @@ class Lab:
         expected_settings = self.settings.read_bytes()
         expected_triggers = {key: self.tasks()[key]["Triggers"] for key in TASK_TIMES}
         updater = self.tasks()["PluginUpdates"]
-        wait(lambda: self.tasks()["PluginUpdates"]["State"] == "Idle", "startup updater idle")
+        wait(lambda: self.tasks()["PluginUpdates"]["State"].lower() == "idle", "startup updater idle")
         self.catalog(candidate=True)
         self.post(f'/ScheduledTasks/Running/{updater["Id"]}')
         wait(lambda: any(p["Version"] == "0.4.0.0" for p in self.plugins()), "automatic catalog upgrade")
-        wait(lambda: self.tasks()["PluginUpdates"]["State"] == "Idle", "catalog updater completion")
-        assert self.tasks()["PluginUpdates"]["LastExecutionResult"]["Status"] == "Completed"
+        wait(lambda: self.tasks()["PluginUpdates"]["State"].lower() == "idle", "catalog updater completion")
+        assert self.tasks()["PluginUpdates"]["LastExecutionResult"]["Status"].lower() == "completed"
         print("Automatic updater staged 0.4.0.0 with the previous release still in the feed.", flush=True)
         return expected_settings, expected_triggers
 
@@ -212,13 +220,13 @@ class Lab:
         assert self.settings.read_bytes() == expected_settings and self.settings.stat().st_mode & 0o777 == 0o600
         assert {key: self.tasks()[key]["Triggers"] for key in TASK_TIMES} == expected_triggers
         checks = self.get("/RemoteAdminDesk/ImportHistory")
-        assert len(checks["services"]) == 2
-        for service in checks["services"]:
-            assert service["state"] == "ready" and service["items"][0]["jellyfin"] == "not-in-sample"
-        wait(lambda: self.tasks()["PluginUpdates"]["State"] == "Idle", "updater idle after activation")
+        assert len(checks["Services"]) == 2
+        for service in checks["Services"]:
+            assert service["State"] == "ready" and service["Items"][0]["Jellyfin"] == "not-in-sample"
+        wait(lambda: self.tasks()["PluginUpdates"]["State"].lower() == "idle", "updater idle after activation")
         time.sleep(8)
         assert not self.get("/System/Info")["HasPendingRestart"], "Updater set Restart pending after activation"
-        assert any(p["Version"] == "0.4.0.0" and p["Status"] == "Active" for p in self.plugins())
+        assert any(p["Version"] == "0.4.0.0" and p["Status"].lower() == "active" for p in self.plugins())
         print("PASS: catalog upgrade, active candidate, unchanged settings and triggers, live Import History, and clean restart.", flush=True)
 
 
