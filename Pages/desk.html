@@ -22,6 +22,30 @@
         }
         #remoteAdminDesk .rad-top { justify-content: space-between; }
         #remoteAdminDesk .rad-hero h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.5rem); letter-spacing: -.035em; }
+        #remoteAdminDesk .rad-brand { display: flex; align-items: center; gap: .85rem; }
+        #remoteAdminDesk .rad-brand-icon {
+            display: grid; grid-template: 1fr 1fr / 1fr 1fr; gap: .18rem;
+            box-sizing: border-box; width: 2.6rem; height: 2.6rem; flex-shrink: 0;
+            padding: .58rem; border-radius: .74rem; color: #112741; background: #91c7ff;
+        }
+        #remoteAdminDesk .rad-brand-icon::before, #remoteAdminDesk .rad-brand-icon::after,
+        #remoteAdminDesk .rad-brand-icon span { content: ""; background: currentColor; border-radius: .12rem; }
+        #remoteAdminDesk .rad-brand-icon::before { grid-row: span 2; }
+        #remoteAdminDesk .rad-overview-title { margin: .15rem 0; font-size: 1.35rem; }
+        #remoteAdminDesk .rad-section-head { margin: 1.4rem 0 .7rem; }
+        #remoteAdminDesk .rad-section-head p { margin: .35rem 0 0; }
+        #remoteAdminDesk .rad-plot { margin: .75rem 0 0; }
+        #remoteAdminDesk .rad-plot-bars { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: .24rem; }
+        #remoteAdminDesk .rad-plot-point { min-width: 0; text-align: center; font-size: .72rem; }
+        #remoteAdminDesk .rad-plot-stack {
+            height: 7rem; display: flex; align-items: end; gap: 2px; border-bottom: 1px solid var(--rad-line);
+            background: repeating-linear-gradient(to top, transparent 0 calc(25% - 1px), var(--rad-line) calc(25% - 1px) 25%);
+        }
+        #remoteAdminDesk .rad-plot-stack span { flex: 1; background: var(--rad-accent); border-radius: .2rem .2rem 0 0; }
+        #remoteAdminDesk .rad-plot-stack span:nth-child(2) { background: #40b894; }
+        #remoteAdminDesk .rad-plot-point time { display: block; padding-top: .35rem; white-space: nowrap; }
+        #remoteAdminDesk .rad-plot-legend { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: .65rem; font-size: .84em; }
+        #remoteAdminDesk .rad-plot-data { font-size: .85rem; }
         #remoteAdminDesk .rad-hero p { margin: .5em 0 0; }
         #remoteAdminDesk .rad-muted { opacity: .78; }
         #remoteAdminDesk .rad-metrics {
@@ -112,7 +136,7 @@
     <div data-role="content" class="content-primary rad-wrap">
         <header class="rad-hero">
             <div class="rad-top">
-                <h1>VMS Expanded Admin Dashboard</h1>
+                <div class="rad-brand"><span class="rad-brand-icon" aria-hidden="true"><span></span></span><h1>VMS Admin Ext. Dash.</h1></div>
                 <div class="rad-controls">
                     <button is="emby-button" type="button" class="raised" data-desk="refresh" hidden>Refresh overview</button>
                     <button is="emby-button" type="button" class="raised" data-desk="snapshot" hidden>Create shareable snapshot</button>
@@ -143,6 +167,16 @@
                 <div class="rad-metric"><strong class="rad-metric-value" data-desk="task-total">—</strong><span>Failed tasks</span></div>
                 <div class="rad-metric"><strong class="rad-metric-value" data-desk="space-total">—</strong><span>Lowest free space</span></div>
             </div>
+            <div class="rad-top rad-section-head">
+                <div><h2 class="rad-overview-title">Trends</h2><p class="rad-muted" data-desk="visual-status" role="status">Loading the saved charts…</p></div>
+                <label>Activity window <select data-desk="visual-window"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+            </div>
+            <div class="rad-grid">
+                <section class="rad-card rad-wide"><h2>Playback starts and sign-ins</h2><div data-desk="visual-activity"></div></section>
+                <section class="rad-card"><h2>Recent media additions</h2><div data-desk="visual-media"></div></section>
+                <section class="rad-card"><h2>Free-space history</h2><div data-desk="visual-capacity"></div></section>
+            </div>
+            <div class="rad-section-head"><h2 class="rad-overview-title">Live server activity</h2></div>
             <div class="rad-grid">
                 <section class="rad-card">
                     <h2>Active playback</h2><p class="rad-muted" data-desk="playback"></p><div data-desk="stream-chart"></div><ul class="rad-data" data-desk="sessions"></ul>
@@ -341,7 +375,7 @@ const DeskAnalysis = (() => {
         const order = { critical: 0, high: 1, warning: 2, info: 3 };
         return {
             findings: Array.from(findings.values()).sort((a, b) => order[a.severity] - order[b.severity] || b.count - a.count),
-            levels, lines: lines.length - offset, offset
+            levels, lines: Object.values(levels).reduce((total, count) => total + count, 0), offset
         };
     }
 
@@ -544,7 +578,40 @@ const DeskAnalysis = (() => {
             && running.replace(/(?:\.0)+$/, "") === target.replace(/(?:\.0)+$/, "");
     }
 
-    return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts, activityBuckets, matchesVersion };
+    function livePlayback(sessions) {
+        return sessions.filter(session => session.NowPlayingItem).map(session => {
+            const engine = session.TranscodingInfo;
+            const reported = session.PlayState?.PlayMethod;
+            let method;
+            if (engine?.IsVideoDirect && engine.IsAudioDirect === false) method = "Direct stream";
+            else if (engine?.VideoCodec && engine.IsVideoDirect === false) method = "Transcode";
+            else if (engine?.IsAudioDirect && (engine.IsVideoDirect || !engine.VideoCodec)) method = "Remux";
+            else method = { DirectPlay: "Direct play", DirectStream: "Direct stream", Transcode: "Transcode" }[reported] || "Unknown";
+            return { session, method, paused: !!session.PlayState?.IsPaused };
+        });
+    }
+
+    function trendBuckets(rows, days, measuredAt, coverageStart, keys) {
+        const end = Math.floor(Date.parse(measuredAt) / day) * day;
+        const oldest = Math.max(end - (days - 1) * day,
+            coverageStart ? Math.floor(Date.parse(coverageStart) / day) * day : -Infinity);
+        const width = days > 30 ? 7 : days > 14 ? 3 : 1;
+        const indexed = new Map(rows.map(row => [Date.parse(row.date), row]));
+        const buckets = [];
+        for (let start = oldest; start <= end; start += width * day) {
+            const stop = Math.min(end, start + (width - 1) * day);
+            const values = keys.map(key => {
+                let total = 0;
+                for (let date = start; date <= stop; date += day) total += indexed.get(date)?.[key] || 0;
+                return total;
+            });
+            buckets.push({ date: new Date(start).toISOString().slice(0, 10), values });
+        }
+        return buckets;
+    }
+
+    return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts,
+        activityBuckets, matchesVersion, livePlayback, trendBuckets };
 })();
 
         const page = document.getElementById("remoteAdminDesk");
@@ -556,8 +623,8 @@ const DeskAnalysis = (() => {
             : "size unavailable";
         const tabs = [...page.querySelectorAll("[data-rad-tab]")];
         const tabPanels = [...page.querySelectorAll("[data-rad-panel]")];
-        let signal, pageRequest, busy, historyKey, activeClient, storage, history, historyChecked,
-            arrivals, arrivalLimit, report, knownUsers;
+        let signal, pageRequest, busy, cacheKey, activeClient, storage, history,
+            arrivals, arrivalLimit, report, knownUsers, charts, playbackRequest, playbackTimer, chartTimer;
         function selectTab(selected, focus = false) {
             for (const tab of tabs) {
                 const active = tab === selected;
@@ -566,6 +633,7 @@ const DeskAnalysis = (() => {
             }
             for (const panel of tabPanels) panel.hidden = panel.dataset.radPanel !== selected.dataset.radTab;
             if (focus) selected.focus();
+            if (selected === tabs[0] && playbackTimer) void pollPlayback();
         }
         for (const [index, tab] of tabs.entries()) {
             tab.addEventListener("click", () => selectTab(tab));
@@ -693,7 +761,7 @@ const DeskAnalysis = (() => {
             return figure;
         }
 
-        async function read(path, params, max = 1024 * 1024, bodyData) {
+        async function read(path, params, max = 1024 * 1024, bodyData, method = bodyData === undefined ? "GET" : "PUT") {
             const navigation = signal;
             const requestSignal = AbortSignal.any([navigation, AbortSignal.timeout(7500)]);
             const client = activeClient;
@@ -704,7 +772,7 @@ const DeskAnalysis = (() => {
             const headers = { "Authorization": "MediaBrowser Token=" + JSON.stringify(token), "Accept": "application/json" };
             if (bodyData !== undefined) headers["Content-Type"] = "application/json";
             const response = await fetch(url, {
-                method: bodyData === undefined ? "GET" : "PUT",
+                method,
                 headers, body: bodyData === undefined ? undefined : JSON.stringify(bodyData),
                 credentials: "same-origin", cache: "no-store", redirect: "error", signal: requestSignal
             });
@@ -750,11 +818,13 @@ const DeskAnalysis = (() => {
         async function section(name, operation) {
             const navigation = signal;
             navigation.throwIfAborted();
+            const previous = field(name).textContent;
             try {
                 await operation();
             } catch (error) {
                 navigation.throwIfAborted();
-                status(name, problem(error));
+                const message = problem(error);
+                status(name, previous.startsWith(message) ? previous : [message, previous].filter(Boolean).join(" · "));
             }
         }
 
@@ -775,6 +845,143 @@ const DeskAnalysis = (() => {
             }
         }
 
+        const overviewVisible = () => !document.hidden && !field("panels").hidden && !tabPanels[0].hidden;
+
+        async function pollPlayback() {
+            const navigation = signal;
+            if (!overviewVisible() || playbackRequest === navigation) return;
+            playbackRequest = navigation;
+            try {
+                await section("playback", async () => {
+                    const active = DeskAnalysis.livePlayback(await read("Sessions"));
+                    const sampledAt = new Date().toISOString();
+                    const transcodes = active.filter(stream => stream.method === "Transcode").length;
+                    const paused = active.filter(stream => stream.paused).length;
+                    status("active-total", active.length);
+                    status("transcode-total", transcodes);
+                    status("playback", (active.length ? paused + " paused" : "No active playback") + " · " + formatDate(sampledAt));
+                    const methods = new Map();
+                    for (const stream of active) methods.set(stream.method, (methods.get(stream.method) || 0) + 1);
+                    field("stream-chart").replaceChildren(...(methods.size ? [donut("Live playback methods",
+                        [...methods].map(([label, value]) => ({ label, value })))] : []));
+                    setList("sessions", active.slice(0, 24).map(({ session, method, paused }) => {
+                        const media = session.NowPlayingItem;
+                        const engine = session.TranscodingInfo;
+                        return row([media.SeriesName, media.Name].filter(Boolean).join(" · "), [session.UserName,
+                            session.Client, method, paused ? "Paused" : null, engine?.VideoCodec, engine?.HardwareAccelerationType,
+                            Number.isFinite(engine?.Framerate) ? engine.Framerate.toFixed(1) + " fps" : null,
+                            Number.isFinite(engine?.Bitrate) ? Math.round(engine.Bitrate / 1000) + " kbps" : null,
+                            engine?.TranscodeReasons?.join(", ")].filter(Boolean).join(" · "));
+                    }));
+                    report.playback = { active: active.length, paused, transcodes, sampledAt };
+                });
+            } catch {
+                // Navigation cancelled the request.
+            } finally {
+                if (playbackRequest === navigation) playbackRequest = null;
+            }
+        }
+
+        const formatDay = iso => new Date(iso + "T00:00:00Z").toLocaleDateString(undefined,
+            { month: "short", day: "numeric", timeZone: "UTC" });
+
+        function plot(points, labels, format = String) {
+            const figure = document.createElement("figure");
+            figure.className = "rad-plot";
+            const bars = document.createElement("div");
+            bars.className = "rad-plot-bars";
+            bars.setAttribute("aria-hidden", "true");
+            const max = Math.max(1, ...points.flatMap(point => point.values));
+            const details = document.createElement("details");
+            details.className = "rad-plot-data";
+            const summary = document.createElement("summary");
+            summary.textContent = "Chart values";
+            const values = document.createElement("ul");
+            for (const [index, point] of points.entries()) {
+                const label = labels.map((name, i) => name + " " + format(point.values[i])).join(" · ");
+                const column = document.createElement("div");
+                column.className = "rad-plot-point";
+                column.title = formatDay(point.date) + " · " + label;
+                const stack = document.createElement("div");
+                stack.className = "rad-plot-stack";
+                for (const value of point.values) {
+                    const bar = document.createElement("span");
+                    bar.style.height = 100 * value / max + "%";
+                    stack.append(bar);
+                }
+                const time = document.createElement("time");
+                time.dateTime = point.date;
+                if (index === 0 || index === Math.floor(points.length / 2) || index === points.length - 1)
+                    time.textContent = formatDay(point.date);
+                column.append(stack, time);
+                bars.append(column);
+                const item = document.createElement("li");
+                item.textContent = formatDay(point.date) + " · " + label;
+                values.append(item);
+            }
+            const legend = document.createElement("div");
+            legend.className = "rad-plot-legend";
+            for (const [index, name] of labels.entries()) {
+                const key = document.createElement("span");
+                const swatch = document.createElement("i");
+                swatch.className = "rad-swatch";
+                swatch.style.backgroundColor = index ? "#40b894" : "var(--rad-accent)";
+                key.append(swatch, name);
+                legend.append(key);
+            }
+            details.append(summary, values);
+            figure.append(bars, legend, details);
+            return figure;
+        }
+
+        function renderCharts() {
+            if (!charts) return;
+            const days = Number(field("visual-window").value);
+            status("visual-status", "Updated " + formatDate(charts.sampledAt)
+                + (charts.activityCoverageStart ? " · Activity sample capped at 500 account events" : "") + " · UTC dates");
+            const recent = DeskAnalysis.trendBuckets(charts.activity, days, charts.sampledAt, charts.activityCoverageStart,
+                ["starts", "signIns"]);
+            if (recent.some(point => point.values.some(Boolean))) field("visual-activity").replaceChildren(plot(recent,
+                ["Playback starts", "Sign-ins"]));
+            else status("visual-activity", "No playback starts or sign-ins in the sampled window.");
+            const media = charts.media;
+            if (media) {
+                const additions = DeskAnalysis.trendBuckets(media.days, 14, media.sampledAt, media.coverageStart, ["movies", "episodes"]);
+                const caption = document.createElement("p");
+                caption.className = "rad-muted";
+                caption.textContent = "Checked " + formatDate(media.sampledAt) + (media.coverageStart ? " · Latest 120 items" : "");
+                field("visual-media").replaceChildren(caption, additions.some(point => point.values.some(Boolean))
+                    ? plot(additions, ["Movies", "Episodes"]) : "No additions in the sampled window.");
+            } else status("visual-media", "Run the new movies and TV task to collect the first sample.");
+            field("visual-capacity").replaceChildren(...(charts.capacity.length
+                ? charts.capacity.map((volume, index) => {
+                    const details = document.createElement("details");
+                    details.open = index === 0;
+                    const summary = document.createElement("summary");
+                    summary.textContent = volume.mount + " · " + bytes(volume.days.at(-1).freeBytes) + " free";
+                    details.append(summary, plot(volume.days.slice(-12).map(day => ({ date: day.date, values: [day.freeBytes] })),
+                        ["Free space"], bytes));
+                    return details;
+                }) : ["Run the Diagnostic Scan or Check free space to collect the first sample."]));
+        }
+        field("visual-window").addEventListener("change", renderCharts);
+
+        async function restoreDashboard() {
+            const result = await read("RemoteAdminDesk/Dashboard");
+            for (const sample of result.storageHistory) history = DeskAnalysis.recordStorage(history, sample);
+            if (result.storage && (!storage || Date.parse(result.storage.sampledAt) >= Date.parse(storage.sampledAt)))
+                storage = result.storage;
+            renderStorage();
+            if (result.branches) renderBranches(result.branches);
+            if (result.charts && (!charts || Date.parse(result.charts.sampledAt) > Date.parse(charts.sampledAt))) {
+                charts = result.charts;
+                renderCharts();
+            } else if (!charts) {
+                status("visual-status", "Run Update visual dash in Jellyfin Scheduled Tasks to create the first charts.");
+                for (const name of ["visual-activity", "visual-media", "visual-capacity"]) status(name, "Awaiting chart refresh.");
+            }
+        }
+
         async function overview(initialInfo) {
             await section("server", async () => {
                 const info = initialInfo || await read("System/Info");
@@ -783,47 +990,16 @@ const DeskAnalysis = (() => {
                     info.HasPendingRestart ? "Restart pending" : null].filter(Boolean).join(" · "));
                 report.server = { version: info.Version, restartPending: !!info.HasPendingRestart };
             });
-            for (const name of ["active-total", "transcode-total", "task-total"]) status(name, "—");
-            field("stream-chart").replaceChildren();
-            setList("sessions", []);
-            setList("tasks", []);
-            delete report.playback;
-            delete report.tasks;
-            await section("playback", async () => {
-                const sessions = await read("Sessions");
-                const active = sessions.filter(session => session.NowPlayingItem);
-                const transcodes = active.filter(session => session.PlayState?.PlayMethod === "Transcode"
-                    || (session.TranscodingInfo && session.TranscodingInfo.IsVideoDirect === false)).length;
-                const paused = active.filter(session => session.PlayState?.IsPaused).length;
-                status("active-total", active.length);
-                status("transcode-total", transcodes);
-                status("playback", active.length ? paused + " paused" : "No streams are playing.");
-                const methods = new Map();
-                for (const session of active) {
-                    const method = session.PlayState?.PlayMethod;
-                    const label = { DirectPlay: "Direct play", DirectStream: "Direct stream", Transcode: "Transcode" }[method] || "Unknown method";
-                    methods.set(label, (methods.get(label) || 0) + 1);
-                }
-                field("stream-chart").replaceChildren(...(methods.size ? [chart("Playback methods",
-                    [...methods].map(([label, value]) => ({ label, value })))] : []));
-                setList("sessions", active.slice(0, 24).map(session => {
-                    const media = session.NowPlayingItem;
-                    const transcode = session.TranscodingInfo;
-                    return row([media.SeriesName, media.Name].filter(Boolean).join(" · "), [session.UserName,
-                        session.Client, session.PlayState?.PlayMethod, session.PlayState?.IsPaused ? "Paused" : null,
-                        transcode?.VideoCodec, transcode?.HardwareAccelerationType,
-                        Number.isFinite(transcode?.Framerate) ? transcode.Framerate.toFixed(1) + " fps" : null,
-                        Number.isFinite(transcode?.Bitrate) ? Math.round(transcode.Bitrate / 1000) + " kbps" : null,
-                        transcode?.TranscodeReasons?.join(", ")].filter(Boolean).join(" · "));
-                }));
-                report.playback = { active: active.length, paused, transcodes };
-            });
+            await Promise.all([pollPlayback(), section("visual-status", restoreDashboard), readTasks()]);
+        }
+
+        async function readTasks() {
             await section("task-summary", async () => {
                 const tasks = await read("ScheduledTasks", { isHidden: false });
                 const running = tasks.filter(task => /Running|Cancelling/.test(task.State));
                 const failed = tasks.filter(task => task.LastExecutionResult?.Status === "Failed")
                     .sort((a, b) => Date.parse(b.LastExecutionResult.EndTimeUtc) - Date.parse(a.LastExecutionResult.EndTimeUtc));
-                const deskTasks = tasks.filter(task => /^(RemoteAdminDeskScan|RemoteAdminDeskMedia)$/.test(task.Key));
+                const deskTasks = tasks.filter(task => /^RemoteAdminDesk(Scan|Media|Visual)$/.test(task.Key));
                 status("task-total", failed.length);
                 status("task-summary", running.length + " active · " + failed.length + " failed on their latest run");
                 setList("tasks", [...running, ...failed.filter(task => !running.includes(task)),
@@ -888,40 +1064,52 @@ const DeskAnalysis = (() => {
                 volumes: storage.volumes.map(({ total, available, problem }) => ({ total, available, problem: !!problem })) };
         }
 
+        function savedCheck(name) {
+            try {
+                const value = sessionStorage.getItem(cacheKey + ":" + name);
+                return value && value.length <= 512 * 1024 ? JSON.parse(value) : null;
+            } catch { return null; }
+        }
+
+        function rememberCheck(name, result) {
+            const saved = { sampledAt: new Date().toISOString(), result };
+            try {
+                const encoded = JSON.stringify(saved);
+                if (encoded.length <= 512 * 1024) sessionStorage.setItem(cacheKey + ":" + name, encoded);
+            } catch { /* the current dashboard still works without browser storage */ }
+            return saved;
+        }
+
         async function readStorage() {
             status("storage", "Reading media mount capacity…");
-            const current = await read("RemoteAdminDesk/Storage");
-            if (Date.now() - historyChecked >= 60_000) {
-                await section("storage", async () => {
-                    const saved = await read("RemoteAdminDesk/Samples");
-                    for (const sample of saved.samples) history = DeskAnalysis.recordStorage(history, sample);
-                    historyChecked = Date.now();
-                });
-            }
+            const current = await read("RemoteAdminDesk/Storage", undefined, 1024 * 1024, undefined, "POST");
+            if (current.problem) throw new Error(current.problem);
             history = DeskAnalysis.recordStorage(history, current);
             storage = current;
-            try { localStorage.setItem(historyKey, JSON.stringify(history)); } catch { /* scheduled history remains available */ }
             renderStorage();
         }
 
-        async function readAdditions() {
-            status("additions", "Reading up to 100 indexed additions…");
-            const result = await read("Items", { recursive: true, includeItemTypes: "Movie,Episode", sortBy: "DateCreated",
-                sortOrder: "Descending", limit: 100, enableTotalRecordCount: false, enableImages: false,
-                enableUserData: false, fields: "DateCreated,MediaSources" });
-            arrivals = DeskAnalysis.additions(result.Items);
+        async function readAdditions(saved) {
+            if (!saved) {
+                status("additions", "Reading up to 100 indexed additions…");
+                const result = await read("Items", { recursive: true, includeItemTypes: "Movie,Episode", sortBy: "DateCreated",
+                    sortOrder: "Descending", limit: 100, enableTotalRecordCount: false, enableImages: false,
+                    enableUserData: false, fields: "DateCreated,MediaSources" });
+                saved = rememberCheck("additions", DeskAnalysis.additions(result.Items));
+            }
+            arrivals = saved.result;
             arrivalLimit = arrivals.length === 100;
             status("additions", arrivals.length + " indexed movies and episodes in this sample"
-                + (arrivalLimit ? " · capped at 100" : "") + ". Import times may differ from downloads.");
+                + (arrivalLimit ? " · capped at 100" : "") + " · checked " + formatDate(saved.sampledAt) + ". Import times may differ from downloads.");
             setList("recent", arrivals.slice(0, 15).map(item =>
                 row(item.name, [item.type, formatDate(item.date), bytes(item.size)].join(" · "))));
             const formats = DeskAnalysis.codecCounts(arrivals);
             if (formats.size) field("codecs").replaceChildren(chart("Video codec counts in this sample",
                 [...formats].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([label, value]) => ({ label, value }))));
             else status("codecs", "Video codecs unavailable in this sample.");
-            const days = DeskAnalysis.recentDayCounts(arrivals);
+            const days = DeskAnalysis.recentDayCounts(arrivals, Date.parse(saved.sampledAt));
             field("arrival-chart").replaceChildren(...(days.some(day => day.value) ? [chart("Indexed additions · last 7 days", days)] : []));
-            report.additions = { sampled: arrivals.length, capped: arrivalLimit, codecs: [...formats.keys()].sort() };
+            report.additions = { sampledAt: saved.sampledAt, sampled: arrivals.length, capped: arrivalLimit, codecs: [...formats.keys()].sort() };
             renderStorage();
         }
 
@@ -929,24 +1117,29 @@ const DeskAnalysis = (() => {
             field(from).addEventListener("change", () => { field(to).value = field(from).value; });
         }
 
-        async function readUsage() {
-            const days = Number(field("window").value);
-            status("usage", "Reading recent Jellyfin activity events…");
-            status("overview-history-status", "Reading recent Jellyfin activity events…");
-            const now = Date.now();
-            const result = await read("System/ActivityLog/Entries", { minDate: new Date(now - days * 86400000).toISOString(),
-                limit: 500, hasUserId: true });
-            if (!knownUsers || Date.now() - knownUsers.checked >= 60_000) {
-                try {
-                    const users = await read("Users", { enableImages: false });
-                    knownUsers = { users, checked: Date.now() };
-                } catch (error) {
-                    signal.throwIfAborted();
+        async function readUsage(saved) {
+            if (!saved) {
+                const days = Number(field("window").value);
+                status("usage", "Reading recent Jellyfin activity events…");
+                status("overview-history-status", "Reading recent Jellyfin activity events…");
+                const now = Date.now();
+                const result = await read("System/ActivityLog/Entries", { minDate: new Date(now - days * 86400000).toISOString(),
+                    limit: 500, hasUserId: true });
+                if (!knownUsers || Date.now() - knownUsers.checked >= 60_000) {
+                    try {
+                        const users = await read("Users", { enableImages: false });
+                        knownUsers = { users, checked: Date.now() };
+                    } catch { signal.throwIfAborted(); }
                 }
+                const usage = DeskAnalysis.playbackSummary(result.Items, knownUsers?.users || []);
+                usage.titles = usage.titles.slice(0, 12).map(({ viewers, ...title }) => ({ ...title, viewers: viewers.size }));
+                usage.users = usage.users.slice(0, 20);
+                saved = rememberCheck("usage", { usage, days, now, count: result.Items.length,
+                    capped: result.Items.length === 500 || result.TotalRecordCount > result.Items.length });
             }
-            const usage = DeskAnalysis.playbackSummary(result.Items, knownUsers?.users || []);
-            const capped = result.Items.length === 500 || result.TotalRecordCount > result.Items.length;
-            const coverage = days + "-day window" + (capped ? " · latest " + result.Items.length + " account events; partial window" : "");
+            const { usage, days, now, count, capped } = saved.result;
+            field("window").value = field("overview-window").value = String(days);
+            const coverage = days + "-day window" + (capped ? " · latest " + count + " account events; partial window" : "") + " · checked " + formatDate(saved.sampledAt);
             status("overview-history-status", coverage + " · Jellyfin activity retention determines how far back this goes.");
             status("usage", usage.logins + " successful logins · " + usage.sessions + " connected sessions · "
                 + usage.starts + " stream starts · " + usage.stops + " stream stops · " + coverage
@@ -956,7 +1149,7 @@ const DeskAnalysis = (() => {
                     + " stream starts · " + user.stops + " stream stops · latest " + formatDate(user.latest)))
                 : ["No attributable activity events in this sample."]);
             setList("popular", usage.titles.length ? usage.titles.slice(0, 12).map(title =>
-                (title.name || "Title ID " + title.id) + " · " + title.starts + " starts · " + title.viewers.size + " identified viewers")
+                (title.name || "Title ID " + title.id) + " · " + title.starts + " starts · " + title.viewers + " identified viewers")
                 : ["No title-attributed starts in this sample."]);
             field("usage-users").hidden = false;
             field("usage-popular").hidden = false;
@@ -976,12 +1169,15 @@ const DeskAnalysis = (() => {
             field("overview-history-charts").replaceChildren(donut("Recorded event mix", events),
                 ...events.filter(event => event.value > 0).map(event => chart(event.label + " over time",
                     buckets.map(bucket => ({ label: bucket.label, value: bucket[event.kind] })))));
-            report.usage = { days, starts: usage.starts, stops: usage.stops, logins: usage.logins, sessions: usage.sessions, capped };
+            report.usage = { sampledAt: saved.sampledAt, days, starts: usage.starts, stops: usage.stops, logins: usage.logins, sessions: usage.sessions, capped };
         }
 
-        async function readLogs() {
-            status("log-status", "Reading the recent log catalog…");
-            const result = await read("RemoteAdminDesk/Logs");
+        async function readLogs(saved) {
+            if (!saved) {
+                status("log-status", "Reading the recent log catalog…");
+                saved = rememberCheck("logs", await read("RemoteAdminDesk/Logs"));
+            }
+            const result = saved.result;
             const select = field("logs");
             select.replaceChildren();
             for (const log of result.files) {
@@ -990,10 +1186,15 @@ const DeskAnalysis = (() => {
                 option.textContent = log.name + " · " + formatDate(log.modifiedAt);
                 select.append(option);
             }
-            status("log-status", !result.files.length ? "No eligible Jellyfin or FFmpeg logs were found."
+            const summary = !result.files.length ? "No eligible Jellyfin or FFmpeg logs were found."
                 : result.limited ? "Catalog limited to 512 directory entries. Select a file to analyze its tail."
-                    : "Select a file to analyze its tail.");
-            clearLogResult();
+                    : "Select a file to analyze its tail.";
+            status("log-status", summary + " Checked " + formatDate(saved.sampledAt) + ".");
+            const previous = savedCheck("tail");
+            if (previous && result.files.some(file => file.name === previous.result.name)) {
+                select.value = previous.result.name;
+                await readTail(previous);
+            }
             field("picker").hidden = !result.files.length;
             field("read-tail").hidden = !result.files.length;
         }
@@ -1011,11 +1212,20 @@ const DeskAnalysis = (() => {
             status("log-status", "Select Analyze log tail to check the selected file.");
         });
 
-        async function readTail() {
-            clearLogResult();
-            status("log-status", "Reading and analyzing the selected log tail…");
-            const log = await read("RemoteAdminDesk/LogTail", { name: field("logs").value });
-            const outcome = DeskAnalysis.analyze(log.content);
+        async function readTail(saved) {
+            let content = "";
+            let outcome;
+            if (!saved) {
+                status("log-status", "Reading and analyzing the selected log tail…");
+                const log = await read("RemoteAdminDesk/LogTail", { name: field("logs").value });
+                content = log.content;
+                outcome = DeskAnalysis.analyze(content);
+                saved = rememberCheck("tail", { name: log.name, truncated: log.truncated,
+                    outcome: { ...outcome, findings: outcome.findings.map(({ examples, ...finding }) => ({ ...finding, examples: [] })) } });
+            } else {
+                outcome = saved.result.outcome;
+            }
+            const log = saved.result;
             field("log-chart").replaceChildren(chart("Log entries by severity", [
                 { label: "Fatal", value: outcome.levels.fatal, tone: "critical" },
                 { label: "Error", value: outcome.levels.error, tone: "critical" },
@@ -1024,7 +1234,8 @@ const DeskAnalysis = (() => {
             status("log-status", outcome.lines + " excerpt lines checked · "
                 + outcome.levels.fatal + " fatal · " + outcome.levels.error + " error · " + outcome.levels.warning + " warning"
                 + (log.truncated || outcome.offset ? " · limited sample" : "")
-                + (outcome.findings.length ? "" : " · no known signatures in this excerpt"));
+                + (outcome.findings.length ? "" : " · no known signatures in this excerpt")
+                + " · checked " + formatDate(saved.sampledAt));
             setList("findings", outcome.findings.map(finding => {
                 const details = document.createElement("details");
                 const summary = document.createElement("summary");
@@ -1037,37 +1248,54 @@ const DeskAnalysis = (() => {
                 summary.append(severity, finding.title + " · " + finding.count + " matching lines");
                 note.textContent = finding.next;
                 examples.textContent = finding.examples.map(example => "Excerpt line " + example.line + " · " + example.text).join("\n");
-                details.append(summary, note, examples);
+                details.append(summary, note);
+                if (finding.examples.length) details.append(examples);
                 return details;
             }));
-            status("excerpt", log.content);
-            field("raw").hidden = !log.content;
-            report.log = { lines: outcome.lines, partial: log.truncated || outcome.offset > 0,
+            status("excerpt", content);
+            field("raw").hidden = !content;
+            report.log = { sampledAt: saved.sampledAt, lines: outcome.lines, partial: log.truncated || outcome.offset > 0,
                 levels: outcome.levels, findings: outcome.findings.map(({ title, severity, count }) => ({ title, severity, count })) };
         }
 
         async function readBranches() {
             status("branch-status", "Checking configured mount points…");
-            const result = await read("RemoteAdminDesk/Branches", undefined, 32 * 1024);
-            status("branch-status", result.problem || result.branches.length + " expected mounts checked"
-                + (result.limited ? " · maximum eight branches" : "") + ".");
+            const reading = await read("RemoteAdminDesk/Branches", undefined, 32 * 1024, undefined, "POST");
+            if (reading.result.problem) throw new Error(reading.result.problem);
+            renderBranches(reading);
+        }
+
+        function renderBranches({ sampledAt, result }) {
+            status("branch-status", result.branches.length + " expected mounts checked"
+                + (result.limited ? " · maximum eight branches" : "") + " · " + formatDate(sampledAt));
             const readable = result.branches.filter(volume => !volume.problem && volume.total > 0);
             field("branch-chart").replaceChildren(...(readable.length ? [chart("Available capacity by branch",
                 readable.map(volume => ({ label: volume.mount, value: volume.available / volume.total,
                     detail: bytes(volume.available) + " free" })), 1)] : []));
             setList("branch-list", result.branches.map(volume => row(volume.mount,
                 volume.problem || volume.fileSystem + " · " + bytes(volume.total) + " total")));
-            report.branches = { measured: readable.length, missingOrUnavailable: result.branches.length - readable.length,
+            report.branches = { sampledAt, measured: readable.length, missingOrUnavailable: result.branches.length - readable.length,
                 limited: result.limited };
         }
 
-        async function readTriage() {
-            status("triage-status", "Reading the latest FFmpeg log excerpts…");
-            const result = await read("RemoteAdminDesk/PlaybackTriage", undefined, 32 * 1024);
-            status("triage-status", result.logs.length
-                ? "Recent FFmpeg logs sorted by time. Compare their timestamps with the affected session or stream."
-                : "No recent FFmpeg transcode logs were found.");
-            setList("triage-logs", result.logs.map(log => {
+        async function readTriage(saved) {
+            if (!saved) {
+                status("triage-status", "Reading the latest FFmpeg log excerpts…");
+                const result = await read("RemoteAdminDesk/PlaybackTriage", undefined, 64 * 1024);
+                const counts = result.logs.map(log => log.signals.length);
+                const compact = { ...result, logs: result.logs.map(({ signals, ...log }, i) => ({ ...log, count: counts[i] })) };
+                saved = rememberCheck("triage", compact);
+                renderTriage(saved, result.logs);
+            } else renderTriage(saved);
+        }
+
+        function renderTriage(saved, logs = saved.result.logs) {
+            const result = saved.result;
+            status("triage-status", (logs.length
+                ? "Recent FFmpeg logs sorted by time."
+                : "No recent FFmpeg transcode logs were found.") + " Checked " + formatDate(saved.sampledAt) + ".");
+            setList("triage-logs", logs.map(log => {
+                if (!log.signals) return row(formatDate(log.modifiedAt) + " · " + log.name, log.count + " matching lines");
                 const details = document.createElement("details");
                 const title = document.createElement("summary");
                 title.textContent = formatDate(log.modifiedAt) + " · " + log.name
@@ -1077,13 +1305,19 @@ const DeskAnalysis = (() => {
                 details.append(title, evidence);
                 return details;
             }));
-            report.triage = { logs: result.logs.length, withSignals: result.logs.filter(log => log.signals.length).length,
+            report.triage = { sampledAt: saved.sampledAt, logs: result.logs.length, withSignals: result.logs.filter(log => log.count).length,
                 catalogLimited: result.limited };
         }
 
-        async function readImports() {
-            status("import-status", "Checking the first page of each configured Arr queue…");
-            const result = await read("RemoteAdminDesk/Imports", undefined, 128 * 1024);
+        async function readImports(saved) {
+            if (!saved) {
+                status("import-status", "Checking the first page of each configured Arr queue…");
+                const result = await read("RemoteAdminDesk/Imports", undefined, 128 * 1024);
+                if (result.some(queue => !["ready", "missing"].includes(queue.state)) && savedCheck("imports"))
+                    throw new Error("One or more queues could not be read. Showing the previous sample.");
+                saved = rememberCheck("imports", result);
+            }
+            const result = saved.result;
             const descriptions = {
                 missing: "API key unset", invalid: "API key format invalid", unauthorized: "Access rejected",
                 "api-error": "API request failed", timeout: "Timed out", unreachable: "Could not connect",
@@ -1091,7 +1325,7 @@ const DeskAnalysis = (() => {
             };
             const ready = result.filter(queue => queue.state === "ready");
             status("import-status", ready.length + " of " + result.length
-                + " services responded. Up to 20 live queue records are shown per service.");
+                + " services responded · checked " + formatDate(saved.sampledAt) + ". Up to 20 records per service.");
             field("import-chart").replaceChildren(...(ready.length ? [chart("Queue totals",
                 ready.map(queue => ({ label: queue.service, value: queue.total ?? queue.items.length })))] : []));
             setList("import-list", result.map(queue => {
@@ -1111,11 +1345,12 @@ const DeskAnalysis = (() => {
             report.imports = result.map(({ service, state, total }) => ({ service, state, total }));
         }
 
-        async function readNotifications() {
-            status("notification-status", "Reading local delivery history…");
-            setList("notification-channels", []);
-            delete report.notifications;
-            const result = await read("RemoteAdminDesk/Notifications", undefined, 24 * 1024);
+        async function readNotifications(saved) {
+            if (!saved) {
+                status("notification-status", "Reading local delivery history…");
+                saved = rememberCheck("notifications", await read("RemoteAdminDesk/Notifications", undefined, 24 * 1024));
+            }
+            const result = saved.result;
             const configuration = { missing: "Webhook unset", invalid: "Webhook format invalid", configured: "Webhook configured" };
             const delivery = {
                 delivered: "Delivered", timeout: "Timed out", "rate-limited": "Rate limited",
@@ -1133,8 +1368,8 @@ const DeskAnalysis = (() => {
                 ].filter(Boolean).join(" · "));
             }));
             status("notification-status", (result.mediaBaseline ? "Media baseline established" : "Media baseline pending")
-                + " · " + result.pendingMedia + " queued for delivery.");
-            report.notifications = result;
+                + " · " + result.pendingMedia + " queued for delivery · checked " + formatDate(saved.sampledAt) + ".");
+            report.notifications = { ...result, sampledAt: saved.sampledAt };
         }
 
         function renderSettings(result, message) {
@@ -1199,6 +1434,9 @@ const DeskAnalysis = (() => {
 
         async function activate() {
             pageRequest?.abort();
+            clearInterval(playbackTimer);
+            clearInterval(chartTimer);
+            playbackTimer = chartTimer = null;
             const current = new AbortController();
             pageRequest = current;
             signal = current.signal;
@@ -1214,7 +1452,9 @@ const DeskAnalysis = (() => {
             selectTab(tabs[0]);
             field("export").value = "";
             for (const name of ["active-total", "transcode-total", "task-total", "space-total"]) status(name, "—");
-            for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "overview-history-charts", "branch-chart", "import-chart"]) field(name).replaceChildren();
+            for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "overview-history-charts",
+                "branch-chart", "import-chart", "visual-activity", "visual-media", "visual-capacity", "codecs"]) field(name).replaceChildren();
+            status("visual-status", "Loading the saved charts…");
             field("picker").hidden = true;
             field("read-tail").hidden = true;
             field("raw").hidden = true;
@@ -1235,9 +1475,9 @@ const DeskAnalysis = (() => {
             status("settings-status", "Load settings to manage integrations.");
             report = newReport();
             storage = null;
+            charts = null;
             arrivals = null;
             history = [];
-            historyChecked = 0;
             knownUsers = null;
             status("status", "Checking administrator access…");
             try {
@@ -1251,9 +1491,10 @@ const DeskAnalysis = (() => {
                         ? "This build targets Jellyfin " + access.jellyfinVersion + "."
                         : "The plugin did not report its Jellyfin build version.");
                 }
-                historyKey = "jellyfin.remoteAdminDesk.v1:" + info.Id + ":" + actor.Id;
+                const scope = info.Id + ":" + actor.Id;
+                cacheKey = "jellyfin.remoteAdminDesk.checks.v1:" + scope;
                 try {
-                    const saved = localStorage.getItem(historyKey);
+                    const saved = localStorage.getItem("jellyfin.remoteAdminDesk.v1:" + scope);
                     if (saved && saved.length < 512 * 1024) {
                         const parsed = JSON.parse(saved);
                         if (Array.isArray(parsed)) history = parsed.filter(row => Number.isFinite(row?.timestamp)
@@ -1265,8 +1506,26 @@ const DeskAnalysis = (() => {
                 field("refresh").hidden = false;
                 field("snapshot").hidden = false;
                 field("server").hidden = false;
+                for (const [name, operation] of [["additions", readAdditions], ["usage", readUsage], ["logs", readLogs],
+                    ["triage", readTriage], ["imports", readImports], ["notifications", readNotifications]]) {
+                    const saved = savedCheck(name);
+                    if (saved) {
+                        try { await operation(saved); }
+                        catch { current.signal.throwIfAborted(); }
+                    }
+                }
                 await perform(() => overview(info));
-                if (!current.signal.aborted) status("status", "Overview checked at " + new Date().toLocaleTimeString());
+                if (!current.signal.aborted) {
+                    status("status", "");
+                    playbackTimer = setInterval(pollPlayback, 10_000);
+                    document.addEventListener("visibilitychange", pollPlayback, { signal: current.signal });
+                    chartTimer = setInterval(async () => {
+                        if (!overviewVisible() || busy) return;
+                        try {
+                            await restoreDashboard();
+                        } catch { /* keep the previous charts if the refresh is unavailable */ }
+                    }, 60_000);
+                }
             } catch (error) {
                 if (!current.signal.aborted) status("status", problem(error));
             }
@@ -1274,7 +1533,7 @@ const DeskAnalysis = (() => {
 
         field("refresh").addEventListener("click", () => perform(async () => {
             await overview();
-            if (!signal.aborted) status("status", "Overview checked at " + new Date().toLocaleTimeString());
+            if (!signal.aborted) status("status", "");
         }));
         for (const [action, output, operation] of [
             ["read-storage", "storage", readStorage], ["read-additions", "additions", readAdditions],
@@ -1306,6 +1565,9 @@ const DeskAnalysis = (() => {
         page.addEventListener("pageshow", activate);
         page.addEventListener("pagehide", () => {
             pageRequest?.abort();
+            clearInterval(playbackTimer);
+            clearInterval(chartTimer);
+            playbackTimer = chartTimer = null;
             savedSettings = null;
             forgetSettings();
             field("settings-form").hidden = true;
