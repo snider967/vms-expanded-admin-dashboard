@@ -14,6 +14,28 @@ const timestamp = offset => new Date(Date.UTC(2026, 10, 1 + offset)).toISOString
 const volume = available => ({ mount: "/mnt/media", fileSystem: "fuse.mergerfs", device: "0:72", total: 1000 * gib, available: available * gib });
 const report = (offset, available) => ({ sampledAt: timestamp(offset), volumes: [volume(available)] });
 
+test("live playback distinguishes paused sessions, remuxes, audio-only transcodes and video transcodes", () => {
+    const item = { Name: "Example" };
+    const streams = desk.livePlayback([
+        { TranscodingInfo: { IsVideoDirect: false } },
+        { NowPlayingItem: item, PlayState: { PlayMethod: "DirectPlay", IsPaused: true } },
+        { NowPlayingItem: item, PlayState: { PlayMethod: "Transcode" }, TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false } },
+        { NowPlayingItem: item, TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: true } },
+        { NowPlayingItem: item, PlayState: { PlayMethod: "DirectStream" }, TranscodingInfo: { IsVideoDirect: false, VideoCodec: "h264" } },
+        { NowPlayingItem: item, PlayState: { PlayMethod: "Transcode" }, TranscodingInfo: { IsVideoDirect: false } }
+    ]);
+    assert.equal(Array.from(streams, stream => stream.method).join(","), "Direct play,Direct stream,Remux,Transcode,Transcode");
+    assert.equal(streams.filter(stream => stream.paused).length, 1);
+});
+
+test("chart buckets omit days before the sample cap and retain zero days within coverage", () => {
+    const rows = [{ date: "2026-11-04", starts: 3, signIns: 2 }];
+    const buckets = desk.trendBuckets(rows, 7, timestamp(6), "2026-11-03T02:00:00Z", ["starts", "signIns"]);
+    assert.equal(buckets[0].date, "2026-11-03");
+    assert.equal(buckets.at(-1).date, "2026-11-07");
+    assert.equal(Array.from(buckets, bucket => bucket.values.join(":")).join(","), "0:0,3:2,0:0,0:0,0:0");
+});
+
 test("log analysis finds signatures, retains evidence, and respects its line budget", () => {
     const log = [
         "ignored: database disk image is malformed", "[12:00:03] [ERR] FFmpeg exited with code 1",
@@ -26,6 +48,8 @@ test("log analysis finds signatures, retains evidence, and respects its line bud
     assert.equal(outcome.findings.find(value => value.title === "FFmpeg or encoder failure").count, 2);
     assert.equal(outcome.findings.find(value => value.title === "Permission or ownership issue").examples[0].line, 5);
     assert(!outcome.findings.some(value => /SQLite/.test(value.title)));
+    const blankLines = desk.analyze("[12:00:03] [ERR] FFmpeg exited with code 1\n\n    \n");
+    assert.equal(blankLines.lines, 1);
 });
 
 test("daily capacity readings forecast runway and reset after cleanup", () => {
