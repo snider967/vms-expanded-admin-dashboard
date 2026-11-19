@@ -17,12 +17,15 @@ internal static class DeskState
     internal const int MediaQueueLimit = 240;
     internal const int MediaBoundaryLimit = 12000;
     internal sealed record MediaAlert(Guid Id, string Title);
+    internal sealed record MediaDigest(Guid Id, int Pages = 0, int Total = 0, int Sent = 0,
+        int NextPage = 0, int PageOffset = 0);
     internal sealed record Media(Guid[] Known, DateTimeOffset? OldestDate, string[] Pending,
         DateTimeOffset? LastScanAt = null, Delivery? Discord = null, DateTimeOffset? Cursor = null,
         Guid[]? CursorIds = null, DateTimeOffset? ScanThrough = null, MediaAlert[]? Outbox = null,
-        Guid[]? DeliveryReceipt = null)
+        Guid[]? DeliveryReceipt = null, MediaDigest? Digest = null)
     {
-        public int QueuedCount => Pending.Length + (Outbox?.Length ?? 0);
+        public int QueuedCount => Digest is { } digest ? digest.Total - digest.Sent : LegacyQueuedCount;
+        internal int LegacyQueuedCount => Pending.Length + (Outbox?.Length ?? 0);
     }
     internal sealed record NotificationChannel(string Configuration, DateTimeOffset? LastScanAt, Delivery? Delivery);
     internal sealed record NotificationStatus(NotificationChannel Diagnostics, NotificationChannel Media, int PendingMedia, bool MediaBaseline);
@@ -59,7 +62,7 @@ internal static class DeskState
     {
         var state = Read<Media>(paths, MediaFile, ct);
         if (state is not null && (state.Known is null || state.Known.Length > 512
-            || state.Pending is null || state.QueuedCount > MediaQueueLimit || state.CursorIds?.Length > MediaBoundaryLimit
+            || state.Pending is null || state.LegacyQueuedCount > MediaQueueLimit || state.CursorIds?.Length > MediaBoundaryLimit
             || state.DeliveryReceipt?.Length > 14))
             throw new JsonException("Remote Admin Desk media state is invalid.");
         return state;
@@ -69,6 +72,18 @@ internal static class DeskState
         Save(paths, DiagnosticFile, data, ct);
     internal static bool SaveMedia(IApplicationPaths paths, Media data, CancellationToken ct) =>
         Save(paths, MediaFile, data, ct);
+
+    private static string DigestPage(Guid id, int index) => $"media-digest-{id:N}-{index}.json";
+
+    internal static MediaAlert[] ReadDigestPage(IApplicationPaths paths, MediaDigest digest, CancellationToken ct) =>
+        Read<MediaAlert[]>(paths, DigestPage(digest.Id, digest.NextPage), ct)
+        ?? throw new IOException("The queued media digest page is missing.");
+
+    internal static void SaveDigestPage(IApplicationPaths paths, MediaDigest digest, MediaAlert[] items, CancellationToken ct) =>
+        Save(paths, DigestPage(digest.Id, digest.Pages), items, ct);
+
+    internal static void RemoveDigestPage(IApplicationPaths paths, MediaDigest digest) =>
+        File.Delete(Path.Join(StateDirectory(paths), DigestPage(digest.Id, digest.NextPage)));
 
     private static string DeliveryShard(Guid id) => "media-delivered-" + id.ToString("N")[..2] + ".json";
 

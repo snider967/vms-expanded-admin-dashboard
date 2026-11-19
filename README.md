@@ -8,7 +8,7 @@ Three Jellyfin tasks support independent schedules. The Diagnostic Scan samples 
 
 ## Release status
 
-`0.4.0.0` adds on-demand Import History under Imports. The plugin ID, settings file, and three scheduled-task identities carry forward from `0.3.0.0`.
+`0.4.0.4` corrects the native Plugins display for a retired VMS copy and sends one Discord digest total per completed media scan window. The plugin ID, settings file, and three scheduled-task identities carry forward from `0.4.0.3`.
 
 ## Build and use in staging
 
@@ -26,7 +26,7 @@ After restart, open **Dashboard → VMS Admin Ext. Dash.** or the installed plug
 
 Open **Dashboard → Scheduled Tasks → VMS Admin Ext. Dash.** to run each task manually or set its trigger. New installs start with no triggers. Run diagnostics and media before **Update visual dash** so the chart refresh can use their latest samples. The chart uses up to 500 activity events and the latest 120 indexed movies and episodes. It labels capped samples.
 
-On Linux, enter the diagnostics and media HTTPS Discord webhook URLs in **Settings → Plugin settings**. Both accept a standard webhook on `discord.com`. Use Notifications to check readiness and delivery. The diagnostic task alerts on low free space, unavailable measured mounts, recoveries, and recognized recent server or FFmpeg failures. The first successful media check establishes a baseline. Later checks send new titles in batches of up to 14 and retain a bounded queue on delivery errors. Library dates follow Jellyfin's indexing configuration. Confirmed downloader completion requires Arr or downloader history.
+On Linux, enter the diagnostics and media HTTPS Discord webhook URLs in **Settings → Plugin settings**. Both accept a standard webhook on `discord.com`. Use Notifications to check readiness and delivery. The diagnostic task alerts on low free space, unavailable measured mounts, recoveries, and recognized recent server or FFmpeg failures. The first successful media check establishes a baseline. Later checks collect the complete scan window before sending one heading with the total. Longer title lists continue in additional Discord messages. Delivery resumes from its saved checkpoint after a retry or restart. Library dates follow Jellyfin's indexing configuration. Confirmed downloader completion requires Arr or downloader history.
 
 On other platforms, or to manage secrets outside the UI, provide `RAD_DIAGNOSTICS_DISCORD_WEBHOOK` and `RAD_MEDIA_DISCORD_WEBHOOK` in Jellyfin's private service environment. Existing environment values take precedence. VMS stores web-entered credentials in a service-owner-only Linux file with mode `0600`. Include that file only in protected backups. The dashboard reports whether a value is set and never returns the credential.
 
@@ -46,7 +46,7 @@ Enter Sonarr and Radarr API keys in Settings on Linux, or set `RAD_SONARR_API_KE
 
 **Check import history** reads up to 20 recent grab, import, failure, and ignored-download events per service. Imported paths are compared by exact match against up to 120 recently indexed Jellyfin movies and episodes. If the file falls outside that sample or the services use different paths, VMS shows that it could not confirm a match. Grab events indicate release selection. Arr import events have their own timestamps, and exact downloader completion times are still unavailable.
 
-Enter expected branch mount points in Settings as a colon-separated list, or set `RAD_MEDIA_BRANCHES` in the service environment. For example, `/mnt/media-a:/mnt/media-b`. The branch view reads up to eight expected mount points, reports a missing mount even when its underlying directory still exists, and keeps branch numbers separate from union capacity. The diagnostic task can flag missing and recovered mounts when Discord is configured.
+Enter expected branch mount points in Settings as a colon-separated list, or set `RAD_MEDIA_BRANCHES` in the service environment. For example, `/mnt/media5tb:/mnt/media10tb`. The branch view reads up to eight expected mount points, reports a missing mount even when its underlying directory still exists, and keeps branch numbers separate from union capacity. The diagnostic task can flag missing and recovered mounts when Discord is configured.
 
 ## GitHub Releases and Jellyfin updates
 

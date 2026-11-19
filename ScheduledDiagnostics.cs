@@ -167,6 +167,7 @@ public sealed class ScheduledMediaAlerts(
     private const int MaxPagesPerRun = 8;
     private const int MaxMessagesPerRun = 12;
     private const int MessageItems = 14;
+    private const int DiscordContentLimit = 2000;
     private static readonly SemaphoreSlim JobGate = new(1, 1);
     private static readonly SemaphoreSlim QueryGate = new(1, 1);
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
@@ -203,27 +204,28 @@ public sealed class ScheduledMediaAlerts(
                 // Migrate the recorded scan cutoff and retain the old IDs and pending messages.
                 state = state with { Cursor = state.LastScanAt ?? sampledAt };
             }
-            state = state with { ScanThrough = state.ScanThrough ?? sampledAt };
-            await Save(state, cancellationToken);
-
-            var pages = 0;
-            var messages = 0;
-            while (true)
+            if (state.Digest is null)
             {
-                if (state.QueuedCount != 0 && messages < MaxMessagesPerRun)
+                state = state with
                 {
+                    Digest = new DeskState.MediaDigest(Guid.NewGuid()),
+                    ScanThrough = state.ScanThrough ?? sampledAt
+                };
+                await Save(state, cancellationToken);
+            }
+            if (state.Digest.Pages == 0 && state.LegacyQueuedCount > 0)
+                state = await StageLegacy(state, cancellationToken);
+
+            // Seal the full window before sending its first message. Later runs
+            // resume either the scan or delivery using the same durable digest.
+            for (var page = 0; page < MaxPagesPerRun && state.ScanThrough is not null; page++)
+                state = await ScanPage(state, cancellationToken);
+            if (state.ScanThrough is null)
+            {
+                for (var message = 0; message < MaxMessagesPerRun && state.QueuedCount > 0; message++)
                     state = await Deliver(state, webhook, cancellationToken);
-                    messages++;
-                }
-                if (state.ScanThrough is not null && pages < MaxPagesPerRun && state.QueuedCount < DeskState.MediaQueueLimit)
-                {
-                    state = await ScanPage(state, cancellationToken);
-                    pages++;
-                }
-                else if (state.QueuedCount == 0 || messages >= MaxMessagesPerRun)
-                {
-                    break;
-                }
+                if (state.QueuedCount == 0)
+                    await Save(state with { Digest = null }, cancellationToken);
             }
             await SaveDashboard(media, cancellationToken);
             progress.Report(100);
@@ -238,12 +240,11 @@ public sealed class ScheduledMediaAlerts(
     {
         var cutoff = state.Cursor!.Value;
         var through = state.ScanThrough!.Value;
-        var limit = Math.Min(QueryLimit, DeskState.MediaQueueLimit - state.QueuedCount);
         var boundary = state.CursorIds ?? [];
         var page = await DeskProbes.Run(QueryGate, Budget, token =>
-            ReadItems(token, limit, cutoff, boundary), ct);
+            ReadItems(token, QueryLimit, cutoff, boundary), ct);
         var items = page.Where(item => item.Date <= through).ToArray();
-        var complete = page.Length < limit || items.Length < page.Length;
+        var complete = page.Length < QueryLimit || items.Length < page.Length;
 
         // Advance the cursor only alongside the queued page. Excluding IDs at the
         // inclusive boundary avoids offset races and handles equal timestamps.
@@ -252,40 +253,65 @@ public sealed class ScheduledMediaAlerts(
             items.Where(item => item.Date == cursor).Select(item => item.Id)).Distinct().ToArray();
         if (cursorIds.Length > DeskState.MediaBoundaryLimit)
             throw new IOException("The media scan has too many items at one timestamp.");
-        var legacy = state.Known.ToHashSet();
+        var legacy = state.Known.Concat((state.Outbox ?? []).Select(item => item.Id)).ToHashSet();
         var alerts = items.Where(item => !legacy.Contains(item.Id))
-            .Select(item => new DeskState.MediaAlert(item.Id, item.Title));
+            .Select(item => new DeskState.MediaAlert(item.Id, item.Title)).DistinctBy(item => item.Id).ToArray();
         var next = state with
         {
             Cursor = cursor, CursorIds = cursorIds, ScanThrough = complete ? null : through,
             LastScanAt = complete ? through : state.LastScanAt,
-            Outbox = (state.Outbox ?? []).Concat(alerts).ToArray()
+            Outbox = complete ? null : state.Outbox
         };
-        await Save(next, ct);
-        return next;
+        return await StagePage(next, alerts, ct);
     }
+
+    private Task<DeskState.Media> StageLegacy(DeskState.Media state, CancellationToken ct)
+    {
+        var alerts = state.Pending.Select(title => new DeskState.MediaAlert(Guid.Empty, title))
+            .Concat((state.Outbox ?? []).DistinctBy(item => item.Id)).ToArray();
+        return StagePage(state with { Pending = [] }, alerts, ct);
+    }
+
+    private Task<DeskState.Media> StagePage(DeskState.Media state, DeskState.MediaAlert[] alerts, CancellationToken ct) =>
+        DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
+        {
+            var delivered = DeskState.ReadDeliveredMedia(paths,
+                alerts.Where(item => item.Id != Guid.Empty).Select(item => item.Id), token);
+            var pending = alerts.Where(item => !delivered.Contains(item.Id)).ToArray();
+            var digest = state.Digest!;
+            if (pending.Length > 0)
+            {
+                // Write the page before advancing the checkpoint. If interrupted,
+                // the same page index can be overwritten on the next scan.
+                DeskState.SaveDigestPage(paths, digest, pending, token);
+                state = state with { Digest = digest with { Pages = digest.Pages + 1, Total = digest.Total + pending.Length } };
+            }
+            DeskState.SaveMedia(paths, state, token);
+            return state;
+        }, ct, waitForSlot: true);
 
     private async Task<DeskState.Media> Deliver(DeskState.Media state, string webhook, CancellationToken ct)
     {
-        var legacy = state.Pending.Take(MessageItems).ToArray();
-        var queued = (state.Outbox ?? []).Take(MessageItems - legacy.Length).ToArray();
-        var delivered = await DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
-            DeskState.ReadDeliveredMedia(paths, queued.Select(item => item.Id), token), ct, waitForSlot: true);
-        var unsent = queued.Where(item => !delivered.Contains(item.Id)).DistinctBy(item => item.Id).ToArray();
-        var titles = legacy.Concat(unsent.Select(item => item.Title)).ToArray();
-        var next = state with
+        var digest = state.Digest!;
+        var page = await DeskProbes.Run(DeskProbes.StateGate, Budget,
+            token => DeskState.ReadDigestPage(paths, digest, token), ct, waitForSlot: true);
+        var additions = digest.Total == 1 ? "addition" : "additions";
+        var content = digest.Sent == 0 ? $"## New in Jellyfin · {digest.Total} {additions}\n\n" : "";
+        var take = 0;
+        foreach (var item in page.Skip(digest.PageOffset).Take(MessageItems))
         {
-            Pending = state.Pending.Skip(legacy.Length).ToArray(),
-            Outbox = (state.Outbox ?? []).Skip(queued.Length).ToArray()
-        };
-        if (titles.Length == 0)
-        {
-            await Save(next, ct);
-            return next;
+            var title = CleanTitle(item.Title);
+            var line = "• " + string.Concat(title.Select(character =>
+                @"\`*_~|[]>".Contains(character) ? "\\" + character : character.ToString()));
+            if (content.Length + line.Length + 1 > DiscordContentLimit) break;
+            if (take > 0) content += "\n";
+            content += line;
+            take++;
         }
+        if (take == 0) throw new IOException("The queued media digest page is invalid.");
+        var offset = digest.PageOffset + take;
+        var finishedPage = offset == page.Length;
 
-        var content = "VMS · New in Jellyfin · " + titles.Length + " movie(s) and episode(s)\n"
-            + string.Join("\n", titles.Select(title => "• " + title));
         var status = await DeskDiscord.Send(webhook, content, ct);
         var delivery = DeskState.RecordDelivery(state.Discord, status);
         if (status != DeskDiscord.Delivered)
@@ -297,8 +323,27 @@ public sealed class ScheduledMediaAlerts(
 
         // Discord has acknowledged the request. Finish recording it even if the
         // scheduled task was cancelled while that response was in flight.
-        next = next with { Discord = delivery, DeliveryReceipt = unsent.Select(item => item.Id).ToArray() };
+        var next = state with
+        {
+            Discord = delivery,
+            DeliveryReceipt = page.Skip(digest.PageOffset).Take(take).Select(item => item.Id)
+                .Where(id => id != Guid.Empty).ToArray(),
+            Digest = digest with
+            {
+                Sent = digest.Sent + take,
+                NextPage = finishedPage ? digest.NextPage + 1 : digest.NextPage,
+                PageOffset = finishedPage ? 0 : offset
+            }
+        };
         await Save(next, CancellationToken.None);
+        if (finishedPage)
+        {
+            try { DeskState.RemoveDigestPage(paths, digest); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning("VMS could not clean up a delivered media digest page.");
+            }
+        }
         return await FlushReceipt(next, CancellationToken.None);
     }
 
@@ -352,10 +397,16 @@ public sealed class ScheduledMediaAlerts(
         return items.Select(item =>
         {
             var title = item is Episode episode ? $"{episode.SeriesName} · {episode.Name}" : item.Name;
-            var clean = string.Concat((title ?? "Untitled media").Where(character => !char.IsControl(character)));
-            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()), item is Episode,
-                clean.Length > 100 ? clean[..97] + "…" : clean);
+            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()), item is Episode, CleanTitle(title));
         }).ToArray();
+    }
+
+    private static string CleanTitle(string? title)
+    {
+        var clean = string.Concat((title ?? "").Where(character => !char.IsControl(character))).Trim();
+        if (clean.Length == 0) return "Untitled media";
+        if (clean.Length <= 100) return clean;
+        return clean[..(char.IsHighSurrogate(clean[96]) ? 96 : 97)] + "…";
     }
 
     private sealed record MediaItem(Guid Id, DateTimeOffset Date, bool IsEpisode, string Title);
