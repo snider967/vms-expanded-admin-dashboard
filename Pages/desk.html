@@ -251,6 +251,11 @@
                     <div data-desk="import-chart"></div>
                     <ul class="rad-data" data-desk="import-list"></ul>
                 </section>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Import history</h2><button is="emby-button" type="button" class="raised" data-desk="read-import-history">Check import history</button></div>
+                    <p class="rad-muted" data-desk="import-history-status" role="status">Check recent grabs, imports, failures, and ignored downloads. Imported files are matched by exact path against a recent Jellyfin sample.</p>
+                    <ul class="rad-data" data-desk="import-history-list"></ul>
+                </section>
             </div>
             <div id="rad-panel-notifications" role="tabpanel" aria-labelledby="rad-tab-notifications" tabindex="0" data-rad-panel="notifications" hidden>
                 <section class="rad-card">
@@ -648,7 +653,7 @@ const DeskAnalysis = (() => {
             });
         }
         const actionButtons = ["refresh", "read-storage", "read-additions", "read-usage", "read-logs", "read-tail",
-            "read-notifications", "read-imports", "read-branches", "read-triage", "read-history", "read-settings"];
+            "read-notifications", "read-imports", "read-import-history", "read-branches", "read-triage", "read-history", "read-settings"];
         const secretFields = [
             ["settings-diagnostics", "diagnosticsWebhook"], ["settings-media", "mediaWebhook"],
             ["settings-sonarr", "sonarrKey"], ["settings-radarr", "radarrKey"]
@@ -1309,6 +1314,12 @@ const DeskAnalysis = (() => {
                 catalogLimited: result.limited };
         }
 
+        const arrProblems = {
+            missing: "API key unset", invalid: "API key format invalid", unauthorized: "Access rejected",
+            "api-error": "API request failed", timeout: "Timed out", unreachable: "Could not connect",
+            "invalid-response": "Unexpected response", "response-limit": "Response exceeded the size cap"
+        };
+
         async function readImports(saved) {
             if (!saved) {
                 status("import-status", "Checking the first page of each configured Arr queue…");
@@ -1318,18 +1329,13 @@ const DeskAnalysis = (() => {
                 saved = rememberCheck("imports", result);
             }
             const result = saved.result;
-            const descriptions = {
-                missing: "API key unset", invalid: "API key format invalid", unauthorized: "Access rejected",
-                "api-error": "API request failed", timeout: "Timed out", unreachable: "Could not connect",
-                "invalid-response": "Unexpected response", "response-limit": "Response exceeded the size cap"
-            };
             const ready = result.filter(queue => queue.state === "ready");
             status("import-status", ready.length + " of " + result.length
                 + " services responded · checked " + formatDate(saved.sampledAt) + ". Up to 20 records per service.");
             field("import-chart").replaceChildren(...(ready.length ? [chart("Queue totals",
                 ready.map(queue => ({ label: queue.service, value: queue.total ?? queue.items.length })))] : []));
             setList("import-list", result.map(queue => {
-                if (queue.state !== "ready") return row(queue.service, descriptions[queue.state] || "Unavailable");
+                if (queue.state !== "ready") return row(queue.service, arrProblems[queue.state] || "Unavailable");
                 const container = document.createDocumentFragment();
                 container.append(row(queue.service, (queue.total ?? queue.items.length) + " in queue"));
                 const items = document.createElement("ul");
@@ -1343,6 +1349,43 @@ const DeskAnalysis = (() => {
                 return container;
             }));
             report.imports = result.map(({ service, state, total }) => ({ service, state, total }));
+        }
+
+        async function readImportHistory(saved) {
+            if (!saved) {
+                status("import-history-status", "Reading recent Arr history and checking Jellyfin's index…");
+                const result = await read("RemoteAdminDesk/ImportHistory", undefined, 128 * 1024);
+                saved = rememberCheck("import-history", result);
+            }
+            const { sampledAt, jellyfinLimit, services } = saved.result;
+            const events = {
+                grabbed: "Release grabbed", imported: "Imported by Arr", failed: "Download failed",
+                ignored: "Download ignored", other: "Other history event"
+            };
+            const matches = {
+                indexed: "File found in Jellyfin", "not-in-sample": "No exact path match in this Jellyfin sample",
+                "no-path": "Import path unavailable", unavailable: "Jellyfin lookup unavailable"
+            };
+            status("import-history-status", "Checked " + formatDate(sampledAt) + " · up to 20 events per service · "
+                + "compares imports with Jellyfin's latest " + jellyfinLimit + " indexed movies and episodes.");
+            setList("import-history-list", services.map(service => {
+                if (service.state !== "ready") return row(service.service, arrProblems[service.state] || "Unavailable");
+                const container = document.createDocumentFragment();
+                const count = service.items.length;
+                const missing = service.total > count ? " of " + service.total : "";
+                container.append(row(service.service, count ? count + missing + " history events" : "No recent history events returned"));
+                if (!count) return container;
+                const list = document.createElement("ul");
+                list.className = "rad-data";
+                for (const item of service.items) {
+                    const entry = document.createElement("li");
+                    entry.append(row(item.title, [events[item.event] || events.other,
+                        item.date ? formatDate(item.date) : "Date unavailable", matches[item.jellyfin]].filter(Boolean).join(" · ")));
+                    list.append(entry);
+                }
+                container.append(list);
+                return container;
+            }));
         }
 
         async function readNotifications(saved) {
@@ -1459,7 +1502,7 @@ const DeskAnalysis = (() => {
             field("read-tail").hidden = true;
             field("raw").hidden = true;
             field("mount-detail").hidden = true;
-            for (const name of ["sessions", "tasks", "volumes", "mounts", "history", "recent", "users", "popular", "findings", "notification-channels", "triage-logs", "branch-list", "import-list"]) setList(name, []);
+            for (const name of ["sessions", "tasks", "volumes", "mounts", "history", "recent", "users", "popular", "findings", "notification-channels", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
             for (const name of ["usage", "excerpt", "codecs", "playback", "task-summary"]) status(name, "");
             status("storage", "Capture current free space and view previous samples.");
             status("additions", "Movies and episodes indexed by Jellyfin.");
@@ -1469,6 +1512,7 @@ const DeskAnalysis = (() => {
             status("branch-status", "Check free space and detect missing configured branch mounts.");
             status("triage-status", "Compare recent FFmpeg evidence with the current streams above.");
             status("import-status", "Check current downloads and the reasons reported for import warnings or failures.");
+            status("import-history-status", "Check recent grabs, imports, failures, and ignored downloads. Imported files are matched by exact path against a recent Jellyfin sample.");
             savedSettings = null;
             forgetSettings();
             field("settings-form").hidden = true;
@@ -1507,7 +1551,7 @@ const DeskAnalysis = (() => {
                 field("snapshot").hidden = false;
                 field("server").hidden = false;
                 for (const [name, operation] of [["additions", readAdditions], ["usage", readUsage], ["logs", readLogs],
-                    ["triage", readTriage], ["imports", readImports], ["notifications", readNotifications]]) {
+                    ["triage", readTriage], ["imports", readImports], ["import-history", readImportHistory], ["notifications", readNotifications]]) {
                     const saved = savedCheck(name);
                     if (saved) {
                         try { await operation(saved); }
@@ -1540,6 +1584,7 @@ const DeskAnalysis = (() => {
             ["read-usage", "usage", readUsage], ["read-logs", "log-status", readLogs], ["read-tail", "log-status", readTail],
             ["read-notifications", "notification-status", readNotifications], ["read-branches", "branch-status", readBranches],
             ["read-triage", "triage-status", readTriage], ["read-imports", "import-status", readImports],
+            ["read-import-history", "import-history-status", readImportHistory],
             ["read-history", "overview-history-status", readUsage], ["read-settings", "settings-status", readSettings]
         ]) field(action).addEventListener("click", () => perform(() => section(output, operation)));
         field("snapshot").addEventListener("click", () => {
@@ -1577,7 +1622,7 @@ const DeskAnalysis = (() => {
             field("report-panel").hidden = true;
             field("logs").replaceChildren();
             for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "codecs", "overview-history-charts", "branch-chart", "import-chart"]) field(name).replaceChildren();
-            for (const name of ["findings", "recent", "sessions", "users", "popular", "mounts", "notification-channels", "triage-logs", "branch-list", "import-list"]) setList(name, []);
+            for (const name of ["findings", "recent", "sessions", "users", "popular", "mounts", "notification-channels", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
         });
     })();
     </script>
