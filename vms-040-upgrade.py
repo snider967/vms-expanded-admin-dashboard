@@ -100,13 +100,7 @@ class Lab:
 <EnableIPv4>true</EnableIPv4><EnableIPv6>false</EnableIPv6><EnableRemoteAccess>false</EnableRemoteAccess>
 <EnableHttps>false</EnableHttps><AutoDiscovery>false</AutoDiscovery><EnableUPnP>false</EnableUPnP>
 </NetworkConfiguration>""")
-        ffmpeg = Path("ffmpeg/usr/lib/jellyfin-ffmpeg").resolve()
-        self.ffmpeg = root / "ffmpeg"
-        for name in ("ffmpeg", "ffprobe"):
-            command = root / name
-            command.write_text(f'#!/bin/sh\nexport LD_LIBRARY_PATH="{ffmpeg}/lib"\nexec "{ffmpeg}/{name}" "$@"\n')
-            command.chmod(0o700)
-        self.dll = "Jellyfin.Plugin.RemoteAdminDesk.dll"
+        self.ffmpeg = Path("/usr/lib/jellyfin-ffmpeg/ffmpeg")
         self.settings = root / "data/data/remote-admin-desk/settings.json"
 
     @contextlib.contextmanager
@@ -231,6 +225,11 @@ class Lab:
         assert any(p["Version"] == "0.4.0.0" and p["Status"].lower() == "active" for p in self.plugins())
         print("PASS: catalog upgrade, active candidate, unchanged settings and triggers, live Import History, and clean restart.", flush=True)
 
+
+subprocess.run(["sudo", "apt-get", "update", "-qq"], check=True)
+subprocess.run(["sudo", "apt-get", "install", "-y", "./ffmpeg.deb"], check=True)
+subprocess.run(["/usr/lib/jellyfin-ffmpeg/ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL)
+subprocess.run(["/usr/lib/jellyfin-ffmpeg/ffprobe", "-version"], check=True, stdout=subprocess.DEVNULL)
 
 with tempfile.TemporaryDirectory(prefix="vms-ci-") as folder:
     root = Path(folder)
