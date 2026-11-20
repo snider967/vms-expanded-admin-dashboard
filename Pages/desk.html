@@ -284,7 +284,12 @@
                         <button is="emby-button" type="button" class="raised" data-desk="test-media">Send media test</button>
                         <p class="rad-muted" data-desk="media-test-status" role="status"></p>
                     </div>
-                    <p class="rad-muted">Configure channels in Settings. Delivery intervals are managed in Jellyfin Scheduled Tasks.</p>
+                    <p class="rad-muted">Set the diagnostics webhook in Settings. Add a daily trigger for VMS daily health digest in Jellyfin Scheduled Tasks to opt in.</p>
+                </section>
+                <section class="rad-card">
+                    <div class="rad-top"><h2>Health incidents</h2><button type="button" class="emby-button raised" data-desk="read-incidents">View incident history</button></div>
+                    <p class="rad-muted" data-desk="incident-status" role="status">Low storage and unavailable mounts recorded by the diagnostic scan.</p>
+                    <ul class="rad-data" data-desk="incident-list"></ul>
                 </section>
             </div>
             <div id="rad-panel-settings" role="tabpanel" aria-labelledby="rad-tab-settings" tabindex="0" data-rad-panel="settings" hidden>
@@ -746,7 +751,7 @@ const DeskAnalysis = (() => {
             });
         }
         const actionButtons = ["refresh", "read-storage", "read-additions", "read-usage", "read-logs", "read-tail",
-            "read-notifications", "test-diagnostics", "test-media", "read-imports", "read-import-history",
+            "read-notifications", "read-incidents", "test-diagnostics", "test-media", "read-imports", "read-import-history",
             "read-branches", "read-triage", "read-history", "read-settings"];
         const secretFields = [
             ["settings-diagnostics", "diagnosticsWebhook"], ["settings-media", "mediaWebhook"],
@@ -1657,12 +1662,13 @@ const DeskAnalysis = (() => {
             }
             const result = saved.result;
             const configuration = { missing: "Webhook unset", invalid: "Webhook format invalid", configured: "Webhook configured" };
-            const channels = [["Diagnostic alerts", result.diagnostics], ["New movies and episodes", result.media]];
+            const channels = [["Diagnostic alerts", result.diagnostics], ["Daily health digest", result.dailyDigest],
+                ["New movies and episodes", result.media]].filter(([, channel]) => channel);
             setList("notification-channels", channels.map(([name, channel]) => {
                 const event = channel.delivery;
                 return row(name, [
                     configuration[channel.configuration] || "Configuration unknown",
-                    channel.lastScanAt ? "Last scan " + formatDate(channel.lastScanAt) : "No recorded scan",
+                    channel.lastScanAt ? "Last scan " + formatDate(channel.lastScanAt) : null,
                     event ? (discordDeliveryLabels[event.status] || "Delivery status unknown") + " at " + formatDate(event.attemptedAt)
                         : "No delivery attempted",
                     event?.deliveredAt && event.status !== "delivered" ? "Last success " + formatDate(event.deliveredAt) : null
@@ -1671,6 +1677,19 @@ const DeskAnalysis = (() => {
             status("notification-status", (result.mediaBaseline ? "Media baseline established" : "Media baseline pending")
                 + " · " + result.pendingMedia + " queued for delivery · checked " + formatDate(saved.sampledAt) + ".");
             report.notifications = { ...result, sampledAt: saved.sampledAt };
+        }
+
+        async function readIncidents() {
+            status("incident-status", "Reading incident history…");
+            const incidents = await read("RemoteAdminDesk/Incidents", undefined, 64 * 1024);
+            setList("incident-list", incidents.map(incident => row(incident.label, [
+                incident.resolvedAt ? "Recovered " + formatDate(incident.resolvedAt) : "Open",
+                "First observed " + formatDate(incident.openedAt),
+                incident.resolvedAt ? null : "Last observed " + formatDate(incident.lastObservedAt)
+            ].filter(Boolean).join(" · "))));
+            status("incident-status", incidents.length ? incidents.filter(incident => !incident.resolvedAt).length
+                + " open · " + incidents.filter(incident => incident.resolvedAt).length + " recovered"
+                : "No recorded incidents.");
         }
 
         function renderSettings(result, message) {
@@ -1760,12 +1779,13 @@ const DeskAnalysis = (() => {
             field("read-tail").hidden = true;
             field("raw").hidden = true;
             field("mount-detail").hidden = true;
-            for (const name of ["sessions", "tasks", "volumes", "mounts", "history", "recent", "users", "popular", "findings", "notification-channels", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
+            for (const name of ["sessions", "tasks", "volumes", "mounts", "history", "recent", "users", "popular", "findings", "notification-channels", "incident-list", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
             for (const name of ["usage", "excerpt", "codecs", "playback", "task-summary"]) status(name, "");
             status("storage", "Capture current free space and view previous samples.");
             status("additions", "Movies and episodes indexed by Jellyfin.");
             status("log-status", "Check Jellyfin server and FFmpeg logs for recurring errors.");
             status("notification-status", "View webhook readiness, last delivery, and pending media alerts.");
+            status("incident-status", "Low storage and unavailable mounts recorded by the diagnostic scan.");
             status("diagnostics-test-status", "");
             status("media-test-status", "");
             status("overview-history-status", "View successful logins, connected sessions, and stream starts from recorded Jellyfin activity.");
@@ -1842,7 +1862,7 @@ const DeskAnalysis = (() => {
         for (const [action, output, operation] of [
             ["read-storage", "storage", readStorage], ["read-additions", "additions", readAdditions],
             ["read-usage", "usage", readUsage], ["read-logs", "log-status", readLogs], ["read-tail", "log-status", readTail],
-            ["read-notifications", "notification-status", readNotifications], ["read-branches", "branch-status", readBranches],
+            ["read-notifications", "notification-status", readNotifications], ["read-incidents", "incident-status", readIncidents], ["read-branches", "branch-status", readBranches],
             ["test-diagnostics", "diagnostics-test-status", () => testNotification("diagnostics")],
             ["test-media", "media-test-status", () => testNotification("media")],
             ["read-triage", "triage-status", readTriage], ["read-imports", "import-status", readImports],
@@ -1884,7 +1904,7 @@ const DeskAnalysis = (() => {
             field("report-panel").hidden = true;
             field("logs").replaceChildren();
             for (const name of ["stream-chart", "arrival-chart", "usage-charts", "log-chart", "codecs", "overview-history-charts", "branch-chart", "import-chart"]) field(name).replaceChildren();
-            for (const name of ["findings", "recent", "sessions", "users", "popular", "mounts", "notification-channels", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
+            for (const name of ["findings", "recent", "sessions", "users", "popular", "mounts", "notification-channels", "incident-list", "triage-logs", "branch-list", "import-list", "import-history-list"]) setList(name, []);
         });
     })();
     </script>
