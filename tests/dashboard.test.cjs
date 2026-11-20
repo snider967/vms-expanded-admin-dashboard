@@ -122,6 +122,53 @@ test("event charts distinguish capped dates, partially covered weeks, and observ
     assert.equal(byWeek.at(-1).values[0], 3);
 });
 
+test("dense indexed history renders on every range, including older UTC buckets", () => {
+    const measured = "2026-11-20T14:31:00Z";
+    const days = [
+        { date: "2026-11-20", movies: 121, episodes: 501 },
+        { date: "2026-11-14", movies: 1 },
+        { date: "2026-10-22", movies: 1 },
+        { date: "2026-08-23", episodes: 1 }
+    ];
+    const hours = [{ hour: 23, movies: 121, episodes: 501 }];
+    for (const [daysCount, expected] of [[1, 622], [7, 623], [30, 624], [90, 625]]) {
+        const range = desk.trendRange(daysCount, measured);
+        const buckets = desk.trendBuckets(range.hourly ? hours : days, range, range.start, ["movies", "episodes"]);
+        assert.equal(buckets.reduce((sum, bucket) => sum + bucket.covered, 0), range.count);
+        assert.equal(buckets.flatMap(bucket => bucket.values).reduce((sum, value) => sum + value, 0), expected);
+    }
+    const limitedBoundary = Date.parse("2026-11-20T13:00:00Z");
+    const week = desk.trendRange(7, measured);
+    assert(desk.trendBuckets(days, week, limitedBoundary, ["movies"]).every(bucket => bucket.values === null));
+    const emptyWeek = desk.trendBuckets([], week, week.start, ["movies"]);
+    assert(emptyWeek.every(bucket => bucket.covered === 1 && bucket.values[0] === 0));
+});
+
+test("event and storage selectors update their own charts and default storage to seven days", () => {
+    const select = name => html.match(new RegExp('<select data-desk="' + name + '">([^<]*(?:<option[^>]+>[^<]*</option>)+)</select>'))[1];
+    const options = name => Array.from(select(name).matchAll(/value="(\d+)"/g), match => Number(match[1]));
+    assert.deepEqual(options("visual-window"), [1, 7, 30, 90]);
+    assert.deepEqual(options("capacity-window"), [7, 30, 90]);
+    assert.match(select("capacity-window"), /value="7" selected/);
+
+    const start = script.indexOf('        field("visual-window").addEventListener');
+    const end = script.indexOf('        async function restoreDashboard', start);
+    const listeners = new Map();
+    const rendered = [];
+    vm.runInNewContext(script.slice(start, end), {
+        field: name => ({ addEventListener: (event, fn) => {
+            assert.equal(event, "change");
+            listeners.set(name, fn);
+        } }),
+        renderEventCharts: () => rendered.push("events"),
+        renderCapacityChart: () => rendered.push("storage")
+    });
+    listeners.get("capacity-window")();
+    assert.deepEqual(rendered, ["storage"]);
+    listeners.get("visual-window")();
+    assert.deepEqual(rendered, ["storage", "events"]);
+});
+
 test("24-hour view uses rolling hourly buckets anchored to the source's collection time", () => {
     const measured = "2026-11-07T03:30:00Z";
     const range = desk.trendRange(1, measured);
