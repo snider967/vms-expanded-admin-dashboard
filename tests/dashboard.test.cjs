@@ -19,13 +19,43 @@ test("live playback distinguishes paused sessions, remuxes, audio-only transcode
     const streams = desk.livePlayback([
         { TranscodingInfo: { IsVideoDirect: false } },
         { NowPlayingItem: item, PlayState: { PlayMethod: "DirectPlay", IsPaused: true } },
-        { NowPlayingItem: item, PlayState: { PlayMethod: "Transcode" }, TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false } },
+        { NowPlayingItem: item, PlayState: { PlayMethod: "DirectStream" }, TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: false, AudioCodec: "aac" } },
         { NowPlayingItem: item, TranscodingInfo: { IsVideoDirect: true, IsAudioDirect: true } },
         { NowPlayingItem: item, PlayState: { PlayMethod: "DirectStream" }, TranscodingInfo: { IsVideoDirect: false, VideoCodec: "h264" } },
         { NowPlayingItem: item, PlayState: { PlayMethod: "Transcode" }, TranscodingInfo: { IsVideoDirect: false } }
     ]);
-    assert.equal(Array.from(streams, stream => stream.method).join(","), "Direct play,Direct stream,Remux,Transcode,Transcode");
+    assert.equal(Array.from(streams, stream => stream.method).join(","), "Direct play,Audio transcode,Remux,Video transcode,Transcode");
     assert.equal(streams.filter(stream => stream.paused).length, 1);
+    assert.equal(streams.filter(stream => stream.isTranscoding).length, 3);
+    assert.equal(streams[1].acceleration, undefined);
+    assert.equal(streams[3].acceleration, "Video acceleration unknown");
+});
+
+test("playback details use the selected media and audio source and show explicit acceleration evidence", () => {
+    const item = { MediaSources: [{ Id: "other", Bitrate: 9000000 }, {
+        Id: "selected", Bitrate: 4000000, MediaStreams: [
+            { Type: "Video", Codec: "hevc" }, { Type: "Audio", Codec: "dts", Index: 1 },
+            { Type: "Audio", Codec: "aac", Index: 2 }
+        ]
+    }] };
+    const state = { MediaSourceId: "selected", AudioStreamIndex: 2 };
+    const engine = { IsVideoDirect: false, VideoCodec: "h264", AudioCodec: "aac", Bitrate: 2000000,
+        TranscodeReasons: ["VideoCodecNotSupported"] };
+    const [direct, hardware, software, unknown] = desk.livePlayback([
+        { NowPlayingItem: item, PlayState: { ...state, PlayMethod: "DirectPlay", IsPaused: false } },
+        ...["qsv", "none", "unrecognized"].map(api => ({ NowPlayingItem: item, PlayState: state,
+            TranscodingInfo: { ...engine, HardwareAccelerationType: api } }))
+    ]);
+    assert.equal(direct.videoCodec, "hevc");
+    assert.equal(direct.audioCodec, "aac");
+    assert.equal(direct.sourceBitrate, 4000000);
+    assert.equal(direct.outputBitrate, null);
+    assert.equal(direct.paused, false);
+    assert.equal(hardware.acceleration, "Intel Quick Sync reported");
+    assert.equal(hardware.outputBitrate, 2000000);
+    assert.equal(hardware.reasons[0], "VideoCodecNotSupported");
+    assert.equal(software.acceleration, "Software reported");
+    assert.equal(unknown.acceleration, "Video acceleration unknown");
 });
 
 test("event charts distinguish capped dates, partially covered weeks, and observed zeroes", () => {
@@ -69,6 +99,17 @@ test("free-space trends leave missing readings blank and forecast only with tota
         desk.trendRange(1, timestamp(13)));
     assert.equal(hourly.observations, 0);
     assert.equal(hourly.projection, null);
+});
+
+test("storage volumes sort by total capacity with a fallback for older charts", () => {
+    const saved = [
+        { mount: "/", totalBytes: 500 * gib, days: [{ freeBytes: 400 * gib }] },
+        { mount: "/unknown", days: [{ freeBytes: 300 * gib }] },
+        { mount: "/mnt/media", days: [{ freeBytes: 200 * gib }] }
+    ];
+    const ordered = desk.largestVolumesFirst(saved, [{ mount: "/mnt/media", total: 15 * 1024 * gib }]);
+    assert.equal(Array.from(ordered, volume => volume.mount).join(","), "/mnt/media,/,/unknown");
+    assert.equal(saved[0].mount, "/");
 });
 
 test("log analysis finds signatures, retains evidence, and respects its line budget", () => {
