@@ -161,12 +161,17 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
             ct.ThrowIfCancellationRequested();
             try
             {
-                var tail = ReadTail(entry.Name, ct, 12 * 1024);
+                using var log = OpenLog(entry.Name);
+                var tail = ReadTail(log, entry.Name, ct, 12 * 1024);
                 var lines = tail.Content.Split('\n');
                 var summary = lines.Select(line => line.Trim())
                     .Where(line => line.Length > 0 && PlaybackSignal().IsMatch(line))
                     .TakeLast(4).Select(line => line[..Math.Min(240, line.Length)]).ToArray();
-                recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated));
+                log.Seek(0, SeekOrigin.Begin);
+                var (head, length) = ReadLogBytes(log, (int)Math.Min(log.Length, 16 * 1024), ct);
+                var complete = length == 0 ? 0 : Array.LastIndexOf(head, (byte)'\n', length - 1, length) + 1;
+                var encoders = VideoEncoders(Encoding.UTF8.GetString(head, 0, complete));
+                recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated, encoders));
             }
             catch (FileNotFoundException)
             {
@@ -179,6 +184,30 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
     [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error|\bdrop=\s*[1-9]",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex PlaybackSignal();
+
+    internal static EncoderEvidence[] VideoEncoders(string header) =>
+        StreamEncoder().Matches(header).Select(match => match.Groups["encoder"].Value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal).Select(encoder => new EncoderEvidence(encoder,
+                encoder switch
+                {
+                    "libx264" or "libx264rgb" or "libx265" or "libsvtav1" or "libaom-av1"
+                        or "libvpx" or "libvpx-vp9" or "librav1e" => "Software encoder",
+                    _ => encoder.Split('_').Last() switch
+                    {
+                        "qsv" => "Intel Quick Sync encoder",
+                        "vaapi" => "VA-API encoder",
+                        "nvenc" => "NVIDIA NVENC encoder",
+                        "amf" => "AMD AMF encoder",
+                        "videotoolbox" => "VideoToolbox encoder",
+                        "v4l2m2m" => "V4L2 M2M encoder",
+                        "rkmpp" => "Rockchip MPP encoder",
+                        _ => null
+                    }
+                })).Where(evidence => evidence.Acceleration is not null).Take(4).ToArray();
+
+    [GeneratedRegex(@"^[ \t]+Stream #\d+:\d+ -> #\d+:\d+ \([^\r\n]* -> [a-z0-9_-]+ \((?<encoder>[a-z0-9_-]+)\)\)\r?$",
+        RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex StreamEncoder();
 
     private static Mount? FindMount(string path, Dictionary<string, Mount> mounts)
     {
@@ -236,16 +265,38 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
 
     internal LogExcerpt ReadTail(string name, CancellationToken ct, int limit = LogBytes)
     {
-        if (!IsLogName(name)) throw new FileNotFoundException();
-        var path = Path.Join(paths.LogDirectoryPath, name);
-        if (!IsOrdinaryFile(File.GetAttributes(path))) throw new FileNotFoundException();
+        using var fs = OpenLog(name);
+        var result = ReadTail(fs, name, ct, limit);
+        if (limit != LogBytes) return result;
+        if (LogCache.Count >= 4)
+            LogCache.TryRemove(LogCache.OrderBy(pair => pair.Value.SampledAt).First().Key, out _);
+        LogCache[name] = result;
+        return result;
+    }
 
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+    private static LogExcerpt ReadTail(FileStream fs, string name, CancellationToken ct, int limit)
+    {
         if (!fs.CanSeek) throw new FileNotFoundException();
         var length = fs.Length;
         var count = (int)Math.Min(length, limit + 1);
         fs.Seek(length - count, SeekOrigin.Begin);
+        var (bytes, read) = ReadLogBytes(fs, count, ct);
+        var truncated = length > limit;
+        var start = truncated ? Array.IndexOf(bytes, (byte)'\n', 0, read) + 1 : 0;
+        var content = truncated && start == 0 ? string.Empty : Encoding.UTF8.GetString(bytes, start, read - start);
+        return new LogExcerpt(DateTimeOffset.UtcNow, name, length, truncated, content);
+    }
+
+    private FileStream OpenLog(string name)
+    {
+        if (!IsLogName(name)) throw new FileNotFoundException();
+        var path = Path.Join(paths.LogDirectoryPath, name);
+        if (!IsOrdinaryFile(File.GetAttributes(path))) throw new FileNotFoundException();
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+    }
+
+    private static (byte[] Bytes, int Read) ReadLogBytes(FileStream fs, int count, CancellationToken ct)
+    {
         var bytes = new byte[count];
         var read = 0;
         while (read < count)
@@ -256,15 +307,7 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
             read += next;
         }
         ct.ThrowIfCancellationRequested();
-        var truncated = length > limit;
-        var start = truncated ? Array.IndexOf(bytes, (byte)'\n', 0, read) + 1 : 0;
-        var content = truncated && start == 0 ? string.Empty : Encoding.UTF8.GetString(bytes, start, read - start);
-        var result = new LogExcerpt(DateTimeOffset.UtcNow, name, length, truncated, content);
-        if (limit != LogBytes) return result;
-        if (LogCache.Count >= 4)
-            LogCache.TryRemove(LogCache.OrderBy(pair => pair.Value.SampledAt).First().Key, out _);
-        LogCache[name] = result;
-        return result;
+        return (bytes, read);
     }
 
     private static bool IsOrdinaryFile(FileAttributes attributes) =>
@@ -287,7 +330,9 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
     internal sealed record LibraryLocation(string Library, string Path, string? Mount, string? Problem);
     internal sealed record StorageReport(DateTimeOffset SampledAt, Volume[] Volumes, LibraryLocation[] Locations, bool Limited, string? Problem);
     internal sealed record BranchReport(Volume[] Branches, bool Limited, string? Problem);
-    internal sealed record PlaybackLog(string Name, DateTimeOffset ModifiedAt, string[] Signals, bool Truncated);
+    internal sealed record EncoderEvidence(string Encoder, string? Acceleration);
+    internal sealed record PlaybackLog(string Name, DateTimeOffset ModifiedAt, string[] Signals, bool Truncated,
+        EncoderEvidence[] Encoders);
     internal sealed record PlaybackTriageReport(DateTimeOffset CheckedAt, PlaybackLog[] Logs, bool Limited);
     internal sealed record LogEntry(string Name, DateTimeOffset ModifiedAt, long Bytes);
     internal sealed record LogCatalog(DateTimeOffset SampledAt, LogEntry[] Files, bool Limited);
