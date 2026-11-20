@@ -28,12 +28,47 @@ test("live playback distinguishes paused sessions, remuxes, audio-only transcode
     assert.equal(streams.filter(stream => stream.paused).length, 1);
 });
 
-test("chart buckets omit days before the sample cap and retain zero days within coverage", () => {
-    const rows = [{ date: "2026-11-04", starts: 3, signIns: 2 }];
-    const buckets = desk.trendBuckets(rows, 7, timestamp(6), "2026-11-03T02:00:00Z", ["starts", "signIns"]);
-    assert.equal(buckets[0].date, "2026-11-03");
-    assert.equal(buckets.at(-1).date, "2026-11-07");
-    assert.equal(Array.from(buckets, bucket => bucket.values.join(":")).join(","), "0:0,3:2,0:0,0:0,0:0");
+test("event charts distinguish capped dates, partially covered weeks, and observed zeroes", () => {
+    const rows = [{ date: "2026-11-03", starts: 4 }, { date: "2026-11-04", starts: 3, signIns: 2 }];
+    const daily = desk.trendRange(7, timestamp(6));
+    const boundary = Date.parse("2026-11-03T02:00:00Z");
+    const buckets = desk.trendBuckets(rows, daily, boundary, ["starts", "signIns"]);
+    assert.equal(buckets.length, 7);
+    assert.equal(buckets[2].values, null);
+    assert.equal(Array.from(buckets.slice(3), bucket => bucket.values.join(":")).join(","), "3:2,0:0,0:0,0:0");
+    const ninety = desk.trendRange(90, timestamp(6));
+    const byWeek = desk.trendBuckets(rows, ninety, boundary, ["starts"]);
+    assert.equal(byWeek.length, 13);
+    assert.equal(byWeek.at(-1).covered, 4);
+    assert.equal(byWeek.at(-1).length, 6);
+    assert.equal(byWeek.at(-1).values[0], 3);
+});
+
+test("24-hour view uses rolling hourly buckets anchored to the source's collection time", () => {
+    const measured = "2026-11-07T03:30:00Z";
+    const range = desk.trendRange(1, measured);
+    const rows = [{ hour: 0, movies: 4 }, { hour: 23, movies: 1, episodes: 2 }];
+    const buckets = desk.trendBuckets(rows, range, Date.parse("2026-11-06T04:00:00Z"), ["movies", "episodes"]);
+    assert.equal(new Date(buckets[0].start).toISOString(), "2026-11-06T03:30:00.000Z");
+    assert.equal(buckets[0].values, null);
+    assert.equal(buckets[1].values.join(":"), "0:0");
+    assert.equal(buckets[23].values.join(":"), "1:2");
+});
+
+test("free-space trends leave missing readings blank and forecast only with total capacity and sufficient history", () => {
+    const source = volume(435);
+    const days = [[0, 500], [4, 480], [8, 460], [13, 435]].map(([offset, free]) =>
+        ({ date: timestamp(offset).slice(0, 10), sampledAt: timestamp(offset), freeBytes: free * gib }));
+    const sample = { mount: source.mount, days, totalBytes: source.total };
+    const range = desk.trendRange(30, timestamp(13));
+    const trend = desk.capacityTrend(sample, range);
+    assert.equal(trend.observations, 4);
+    assert(trend.buckets.some(bucket => bucket.values === null));
+    assert.equal(trend.projection.results.find(result => result.window === 30).days, 67);
+    const hourly = desk.capacityTrend({ mount: sample.mount, days: [{ ...days.at(-1), sampledAt: null }] },
+        desk.trendRange(1, timestamp(13)));
+    assert.equal(hourly.observations, 0);
+    assert.equal(hourly.projection, null);
 });
 
 test("log analysis finds signatures, retains evidence, and respects its line budget", () => {
