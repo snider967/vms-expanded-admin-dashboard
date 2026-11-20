@@ -58,6 +58,18 @@ test("playback details use the selected media and audio source and show explicit
     assert.equal(unknown.acceleration, "Video acceleration unknown");
 });
 
+test("recent transcode rows show encoder evidence and only count matching error lines", () => {
+    const hardware = desk.playbackLogSummary({ name: "FFmpeg.Transcode-phone.log",
+        encoders: [{ encoder: "h264_qsv", acceleration: "Intel Quick Sync encoder" }], signalCount: 0 });
+    assert.equal(hardware.title, "Transcode");
+    assert.equal(hardware.encoder, "h264_qsv · Intel Quick Sync encoder");
+    assert.equal(hardware.issue, null);
+    const remux = desk.playbackLogSummary({ name: "FFmpeg.Remux-sample.log", encoders: [], signalCount: 2 });
+    assert.equal(remux.title, "Remux");
+    assert.equal(remux.encoder, "No video encoder identified");
+    assert.equal(remux.issue, "2 matching error lines");
+});
+
 test("event charts distinguish capped dates, partially covered weeks, and observed zeroes", () => {
     const rows = [{ date: "2026-11-03", starts: 4 }, { date: "2026-11-04", starts: 3, signIns: 2 }];
     const daily = desk.trendRange(7, timestamp(6));
