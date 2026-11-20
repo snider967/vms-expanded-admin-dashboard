@@ -188,7 +188,7 @@
             <div class="rad-grid">
                 <section class="rad-card"><h2>Playback starts and sign-ins</h2><div data-desk="visual-activity"></div></section>
                 <section class="rad-card"><h2>Indexed movies and episodes</h2><div data-desk="visual-media"></div></section>
-                <section class="rad-card rad-wide"><h2>Free space and runway</h2><div data-desk="visual-capacity"></div></section>
+                <section class="rad-card rad-wide"><h2>Free space and runway</h2><label>Storage range <select data-desk="capacity-window"><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select></label><div data-desk="visual-capacity"></div></section>
             </div>
             <div class="rad-section-head"><h2 class="rad-overview-title">Live server activity</h2></div>
             <div class="rad-grid">
@@ -1079,17 +1079,17 @@ const DeskAnalysis = (() => {
                 plot(points, labels, range));
         }
 
-        function renderCharts() {
+        function renderEventCharts() {
             if (!charts) return;
             const days = Number(field("visual-window").value);
             const range = DeskAnalysis.trendRange(days, charts.sampledAt);
             status("visual-status", "Snapshot " + freshness(charts.sampledAt) + " · Chart dates and times in UTC");
             const activityBoundary = charts.activityCoverageStart || charts.oldestRecordedActivity;
             const activityStart = activityBoundary ? Date.parse(activityBoundary) + 1
-                : charts.activityHours ? Infinity : Date.parse(charts.activity[0]?.date) || Infinity;
+                : charts.activityHours ? range.start : Date.parse(charts.activity[0]?.date) || Infinity;
             renderEventTrend("visual-activity", range, range.hourly ? charts.activityHours : charts.activity,
                 activityStart, ["starts", "signIns"], ["Playback starts", "Sign-ins"],
-                charts.activityCoverageStart ? "Latest 500 account events" : "From retained Jellyfin account events");
+                charts.activityCoverageStart ? "Limited account history from an earlier snapshot" : "From retained Jellyfin account events");
             const media = charts.media;
             if (media) {
                 const mediaRange = DeskAnalysis.trendRange(days, media.sampledAt);
@@ -1097,8 +1097,14 @@ const DeskAnalysis = (() => {
                 const mediaStart = Math.max(storedRange.start, media.coverageStart ? Date.parse(media.coverageStart) + 1 : -Infinity);
                 renderEventTrend("visual-media", mediaRange, mediaRange.hourly ? media.hours : media.days, mediaStart,
                     ["movies", "episodes"], ["Movies", "Episodes"],
-                    "Checked " + freshness(media.sampledAt) + (media.coverageStart ? " · Latest 120 indexed items" : ""));
-            } else status("visual-media", "Run the new movies and TV task to collect the first sample.");
+                    "Checked " + freshness(media.sampledAt) + (media.coverageStart ? " · Limited history from an earlier snapshot" : ""));
+            } else status("visual-media", "Run Update visual dash to collect indexed history.");
+        }
+
+        function renderCapacityChart() {
+            if (!charts) return;
+            const days = Number(field("capacity-window").value);
+            const range = DeskAnalysis.trendRange(days, charts.sampledAt);
             const expanded = new Set(Array.from(field("visual-capacity").querySelectorAll("details[open]"), node => node.dataset.mount));
             const firstRender = !field("visual-capacity").querySelector("details");
             const volumes = DeskAnalysis.largestVolumesFirst(charts.capacity, storage?.volumes);
@@ -1113,7 +1119,7 @@ const DeskAnalysis = (() => {
                 const latest = volume.days.at(-1);
                 const asOf = latest.sampledAt ? freshness(latestAt) : trendDay.format(latestAt) + " UTC";
                 const caption = trendText("Last reading " + asOf + " · " + observations + "/"
-                    + range.count + (range.hourly ? " hours" : " days") + " sampled"
+                    + range.count + " days sampled"
                     + (range.width > 1 ? " · latest reading per chart bar" : ""));
                 const estimate = projection?.results.find(result => result.window === days);
                 let runway = "Insufficient comparable history for a runway estimate.";
@@ -1123,8 +1129,6 @@ const DeskAnalysis = (() => {
                     runway = estimate.days === null ? "No net space loss across " + Math.round(estimate.span) + " sampled days."
                         : "Estimated " + (estimate.days > 365 ? "over 365" : Math.ceil(estimate.days)) + " days to the "
                             + bytes(projection.reserve) + " reserve · " + bytes(estimate.rate) + "/day net space loss";
-                else if (range.hourly && projection)
-                    runway = "Select a range of 7 days or more for a runway estimate.";
                 if (latestAt < range.start) runway = "No readings in this range. Runway estimate unavailable.";
                 details.append(summary, caption, trendText(runway, "rad-trend-value"));
                 if (volume.baselineChanged || projection?.reset) details.append(trendText(
@@ -1133,7 +1137,8 @@ const DeskAnalysis = (() => {
                 return details;
             }) : ["Run the Diagnostic Scan or Check free space to collect the first sample."]));
         }
-        field("visual-window").addEventListener("change", renderCharts);
+        field("visual-window").addEventListener("change", renderEventCharts);
+        field("capacity-window").addEventListener("change", renderCapacityChart);
 
         async function restoreDashboard() {
             const result = await read("RemoteAdminDesk/Dashboard");
@@ -1144,7 +1149,8 @@ const DeskAnalysis = (() => {
             if (result.branches) renderBranches(result.branches);
             if (result.charts && (!charts || Date.parse(result.charts.sampledAt) > Date.parse(charts.sampledAt))) {
                 charts = result.charts;
-                renderCharts();
+                renderEventCharts();
+                renderCapacityChart();
             } else if (charts) {
                 const notice = "Snapshot " + freshness(charts.sampledAt) + " · Chart dates and times in UTC";
                 if (field("visual-status").textContent !== notice) status("visual-status", notice);
