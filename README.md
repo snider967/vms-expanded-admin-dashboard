@@ -10,7 +10,7 @@ In **Overview → Playback troubleshooting**, **Check recent transcodes** summar
 
 ## Release status
 
-`0.4.0.4` corrects the native Plugins display for a retired VMS copy and sends one Discord digest total per completed media scan window. The plugin ID, settings file, and three scheduled-task identities carry forward from `0.4.0.3`.
+**0.6.2.0** removes the 500-event and 120-item limits from Overview Trends and gives Free Space and Runway an independent 7-, 30-, and 90-day selector. Run **Update visual dash** after upgrading to replace the earlier chart snapshot. See [GitHub Releases](https://github.com/snider967/vms-expanded-admin-dashboard/releases) for release packages.
 
 ## Build and use in staging
 
@@ -65,6 +65,7 @@ To publish an update, increment both `AssemblyVersion` and `Version`, then push 
 ## Local checks
 
 ```bash
-node tests/dashboard.test.cjs
+dotnet run --project tests/Trends.csproj -c Release
+node --test tests/dashboard.test.cjs
 python3 -m unittest discover -s tests -v
 ```
