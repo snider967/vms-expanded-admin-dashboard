@@ -163,15 +163,17 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
             {
                 using var log = OpenLog(entry.Name);
                 var tail = ReadTail(log, entry.Name, ct, 12 * 1024);
-                var lines = tail.Content.Split('\n');
-                var summary = lines.Select(line => line.Trim())
-                    .Where(line => line.Length > 0 && PlaybackSignal().IsMatch(line))
-                    .TakeLast(4).Select(line => line[..Math.Min(240, line.Length)]).ToArray();
+                // FFmpeg rewrites its progress line with carriage returns.
+                var lines = tail.Content.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                var matches = lines.Where(line => PlaybackSignal().IsMatch(line)).ToArray();
+                var summary = matches.TakeLast(4).Select(line => line[..Math.Min(240, line.Length)]).ToArray();
+                var progress = lines.Reverse().Select(ParsePlaybackProgress).FirstOrDefault(value => value is not null);
                 log.Seek(0, SeekOrigin.Begin);
                 var (head, length) = ReadLogBytes(log, (int)Math.Min(log.Length, 64 * 1024), ct);
                 var complete = length == 0 ? 0 : Array.LastIndexOf(head, (byte)'\n', length - 1, length) + 1;
                 var encoders = VideoEncoders(Encoding.UTF8.GetString(head, 0, complete));
-                recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated, encoders));
+                recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated, encoders,
+                    tail.Bytes, lines.Length, matches.Length, progress));
             }
             catch (FileNotFoundException)
             {
@@ -181,9 +183,23 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
         return new PlaybackTriageReport(DateTimeOffset.UtcNow, recent.ToArray(), catalog.Limited);
     }
 
-    [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error|\bdrop=\s*[1-9]",
+    [GeneratedRegex(@"conversion failed|error while opening encoder|device creation failed|failed to initialize|error initializing|no va display|permission denied|no such file|no space left|invalid data|input/output error",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex PlaybackSignal();
+
+    private static PlaybackProgress? ParsePlaybackProgress(string line)
+    {
+        if (!line.StartsWith("frame=", StringComparison.Ordinal) && !line.StartsWith("size=", StringComparison.Ordinal)
+            && !line.StartsWith("Lsize=", StringComparison.Ordinal)) return null;
+        var values = ProgressField().Matches(line).ToLookup(match => match.Groups["key"].Value, match => match.Groups["value"].Value);
+        if (!values.Contains("frame") && !values.Contains("time")) return null;
+        return new PlaybackProgress(values["time"].FirstOrDefault(), values["frame"].FirstOrDefault(),
+            values["fps"].FirstOrDefault(), values["speed"].FirstOrDefault(), values["drop"].FirstOrDefault());
+    }
+
+    [GeneratedRegex(@"\b(?<key>frame|time|fps|speed|drop)= *(?<value>-?[0-9][0-9:.]*x?)(?:\s|$)",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex ProgressField();
 
     internal static EncoderEvidence[] VideoEncoders(string header) =>
         StreamEncoder().Matches(header).Select(match => match.Groups["encoder"].Value.ToLowerInvariant())
@@ -282,8 +298,15 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
         fs.Seek(length - count, SeekOrigin.Begin);
         var (bytes, read) = ReadLogBytes(fs, count, ct);
         var truncated = length > limit;
-        var start = truncated ? Array.IndexOf(bytes, (byte)'\n', 0, read) + 1 : 0;
-        var content = truncated && start == 0 ? string.Empty : Encoding.UTF8.GetString(bytes, start, read - start);
+        var start = 0;
+        if (truncated)
+        {
+            var separator = bytes.AsSpan(0, read).IndexOfAny((byte)'\n', (byte)'\r');
+            // Prefer complete lines. Keep the bounded suffix if the only available line is longer than the limit.
+            start = separator >= 0 && separator + 1 < read ? separator + 1 : Math.Max(0, read - limit);
+            while (start < read && (bytes[start] & 0xc0) == 0x80) start++;
+        }
+        var content = Encoding.UTF8.GetString(bytes, start, read - start);
         return new LogExcerpt(DateTimeOffset.UtcNow, name, length, truncated, content);
     }
 
@@ -332,7 +355,8 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
     internal sealed record BranchReport(Volume[] Branches, bool Limited, string? Problem);
     internal sealed record EncoderEvidence(string Encoder, string? Acceleration);
     internal sealed record PlaybackLog(string Name, DateTimeOffset ModifiedAt, string[] Signals, bool Truncated,
-        EncoderEvidence[] Encoders);
+        EncoderEvidence[] Encoders, long Bytes, int SampledLines, int SignalCount, PlaybackProgress? Progress);
+    internal sealed record PlaybackProgress(string? Position, string? Frames, string? Fps, string? Speed, string? Dropped);
     internal sealed record PlaybackTriageReport(DateTimeOffset CheckedAt, PlaybackLog[] Logs, bool Limited);
     internal sealed record LogEntry(string Name, DateTimeOffset ModifiedAt, long Bytes);
     internal sealed record LogCatalog(DateTimeOffset SampledAt, LogEntry[] Files, bool Limited);

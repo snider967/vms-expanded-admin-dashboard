@@ -6,6 +6,8 @@ The Overview shows timestamped trends for playback starts, sign-ins, indexed add
 
 Three Jellyfin tasks support independent schedules. The Diagnostic Scan samples media storage and checks recent Jellyfin and FFmpeg errors. The new movies and TV task samples library additions and supports Discord alerts. **Update visual dash** refreshes the Overview charts from recorded activity and the last saved media and storage samples. A separately hosted HTTPS monitor can send Discord outage and recovery notifications. Notifications shows webhook readiness, delivery history, and queued media alerts.
 
+In **Overview → Playback troubleshooting**, **Check recent transcodes** summarizes the four latest FFmpeg logs. Expand a log to see recorded position, frame count, frame rate, encoding speed, dropped frames, and any matching error lines. **Read raw log tail** fetches up to 96 KiB from the end of the selected file. Raw output is only displayed in the current page.
+
 ## Release status
 
 `0.4.0.4` corrects the native Plugins display for a retired VMS copy and sends one Discord digest total per completed media scan window. The plugin ID, settings file, and three scheduled-task identities carry forward from `0.4.0.3`.
