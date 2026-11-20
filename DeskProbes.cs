@@ -168,7 +168,7 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
                     .Where(line => line.Length > 0 && PlaybackSignal().IsMatch(line))
                     .TakeLast(4).Select(line => line[..Math.Min(240, line.Length)]).ToArray();
                 log.Seek(0, SeekOrigin.Begin);
-                var (head, length) = ReadLogBytes(log, (int)Math.Min(log.Length, 16 * 1024), ct);
+                var (head, length) = ReadLogBytes(log, (int)Math.Min(log.Length, 64 * 1024), ct);
                 var complete = length == 0 ? 0 : Array.LastIndexOf(head, (byte)'\n', length - 1, length) + 1;
                 var encoders = VideoEncoders(Encoding.UTF8.GetString(head, 0, complete));
                 recent.Add(new PlaybackLog(entry.Name, entry.ModifiedAt, summary, tail.Truncated, encoders));
@@ -205,7 +205,7 @@ internal sealed partial class DeskProbes(ILibraryManager library, IApplicationPa
                     }
                 })).Where(evidence => evidence.Acceleration is not null).Take(4).ToArray();
 
-    [GeneratedRegex(@"^[ \t]+Stream #\d+:\d+ -> #\d+:\d+ \([^\r\n]* -> [a-z0-9_-]+ \((?<encoder>[a-z0-9_-]+)\)\)\r?$",
+    [GeneratedRegex(@"^[ \t]+(?:Stream #\d+:\d+ -> #\d+:\d+ \([^\r\n]* -> [a-z0-9_-]+ \((?<encoder>[a-z0-9_-]+)\)\)|[a-z0-9_:@.-]+ -> Stream #\d+:\d+ \((?<encoder>[a-z0-9_-]+)\))\r?$",
         RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex StreamEncoder();
 
