@@ -369,13 +369,20 @@ public sealed class ScheduledMediaAlerts(
 
     private static DashboardSnapshot.MediaHistory Summarize(MediaItem[] items, DateTimeOffset sampledAt)
     {
-        var earliestDay = sampledAt.UtcDateTime.Date.AddDays(-29);
-        var days = items.Where(item => item.Date.UtcDateTime.Date >= earliestDay)
+        var earliestDay = sampledAt.UtcDateTime.Date.AddDays(1 - DashboardSnapshot.HistoryDays);
+        var recorded = items.Where(item => item.Date <= sampledAt).ToArray();
+        var days = recorded.Where(item => item.Date.UtcDateTime.Date >= earliestDay)
             .GroupBy(item => DateOnly.FromDateTime(item.Date.UtcDateTime))
             .OrderBy(day => day.Key)
             .Select(day => new DashboardSnapshot.MediaDay(day.Key, day.Count(item => !item.IsEpisode), day.Count(item => item.IsEpisode)))
             .ToArray();
-        return new DashboardSnapshot.MediaHistory(sampledAt, items.Length == QueryLimit ? items[^1].Date : null, days);
+        var hours = recorded.GroupBy(item => DashboardSnapshot.HourIndex(item.Date, sampledAt))
+            .Where(hour => hour.Key >= 0)
+            .OrderBy(hour => hour.Key)
+            .Select(hour => new DashboardSnapshot.MediaHour(hour.Key, hour.Count(item => !item.IsEpisode), hour.Count(item => item.IsEpisode)))
+            .ToArray();
+        return new DashboardSnapshot.MediaHistory(sampledAt, items.Length == QueryLimit
+            ? recorded.LastOrDefault()?.Date ?? sampledAt : null, days, hours);
     }
 
     private MediaItem[] ReadLatest(CancellationToken ct) => ReadItems(ct, QueryLimit);
