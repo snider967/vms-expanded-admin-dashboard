@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
@@ -12,7 +13,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.RemoteAdminDesk;
 
 public sealed partial class ScheduledDiagnostics(
-    ILibraryManager library, IApplicationPaths paths, ILogger<ScheduledDiagnostics> logger) : IScheduledTask
+    ILibraryManager library, IApplicationPaths paths, ILogger<ScheduledDiagnostics> logger, ITaskManager taskManager) : IScheduledTask
 {
     private static readonly SemaphoreSlim ScanGate = new(1, 1);
     private static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(3);
@@ -43,58 +44,71 @@ public sealed partial class ScheduledDiagnostics(
             var readings = storage.Volumes.Where(v => v.Total.HasValue && v.Available.HasValue).ToArray();
             var low = readings.Where(IsLow).ToArray();
             // A missing volume is its own signal and must not act as a low-space recovery.
-            var lowState = low.Length > 0 ? (bool?)true
+            var lowObservation = low.Length > 0 ? (bool?)true
                 : readings.Length > 0 && readings.Length == storage.Volumes.Length
                     && !storage.Limited && storage.Locations.All(location => location.Mount is not null)
-                    ? false : state.StorageWarning;
+                    ? false : null;
             var configuredBranches = DeskSettings.Effective("RAD_MEDIA_BRANCHES", settings.MediaBranches);
             var branches = await DeskProbes.Run(DeskProbes.StorageGate, ProbeBudget,
                 ct => new DashboardSnapshot.TimedBranches(DateTimeOffset.UtcNow, _probes.ReadBranches(configuredBranches, ct)),
                 cancellationToken);
-            var mountState = storage.Locations.Any(location => location.Problem is not null)
+            var mountObservation = storage.Locations.Any(location => location.Problem is not null)
                 || storage.Volumes.Any(volume => volume.Problem is not null)
                 || branches.Result.Branches.Any(volume => volume.Problem is not null) ? true
                 : !storage.Limited && storage.Problem is null && storage.Locations.Length > 0
                     && (string.IsNullOrWhiteSpace(configuredBranches) || (!branches.Result.Limited && branches.Result.Problem is null))
-                    ? false : state.MountWarning;
-            var notices = new List<string>();
-            if (mountState == true && state.MountWarning != true)
-                notices.Add("A media library mount is missing or its capacity could not be verified.");
-            if (mountState == false && state.MountWarning == true)
-                notices.Add("Media library mounts are reporting capacity again.");
-            if (lowState == true && state.StorageWarning != true)
-                notices.Add("Media storage crossed the planning reserve on " + low.Length + " volume(s).");
-            if (lowState == false && state.StorageWarning == true)
-                notices.Add("Media storage is back above the planning reserve.");
-            var unseen = signals.Where(signal => !state.Delivered.Contains(signal.Key, StringComparer.Ordinal)).ToArray();
-            foreach (var signal in unseen)
-                notices.Add(signal.Label);
+                    ? false : (bool?)null;
+            await RecordIncidents(branches.SampledAt, lowObservation, mountObservation, cancellationToken);
 
+            await DeskProbes.Run(DeskProbes.StateGate, ProbeBudget,
+                ct => DashboardSnapshot.UpdateChecks(paths, ct, storage, branches), cancellationToken, waitForSlot: true);
+
+            var now = DateTimeOffset.UtcNow;
+            var (health, notices) = HealthAlerts.Evaluate(state, now, lowObservation, low.Length, mountObservation, signals,
+                HealthDigest.ReadTasks(taskManager));
             var delivery = state.Discord;
-            if (notices.Count != 0 && !string.IsNullOrWhiteSpace(webhook))
+            var sent = false;
+            if (notices.Length > 0 && !string.IsNullOrWhiteSpace(webhook))
             {
                 var result = await DeskDiscord.Send(webhook,
-                    "VMS diagnostic scan\n" + string.Join("\n", notices.Take(10)), cancellationToken);
+                    "**VMS diagnostic alert**\n" + string.Join("\n", notices.Select(notice => "• " + notice.Text)), cancellationToken);
                 delivery = DeskState.RecordDelivery(delivery, result);
                 if (result != DeskDiscord.Delivered)
                 {
-                    // Keep notification state eligible for the next scan.
+                    // Preserve the previous alert checkpoint so the same evidence can be retried.
                     await Save(state with { Discord = delivery }, cancellationToken);
                     logger.LogWarning("VMS Expanded Admin Dashboard could not deliver its Discord diagnostic notification.");
                     throw new InvalidOperationException("Discord diagnostic delivery failed.");
                 }
+                sent = true;
+                health = HealthAlerts.Acknowledge(health, notices, delivery.DeliveredAt!.Value);
             }
 
-            var delivered = state.Delivered.Concat(unseen.Select(signal => signal.Key)).Distinct().TakeLast(64).ToArray();
-            await Save(new DeskState.Diagnostics(samples, delivered, lowState, DateTimeOffset.UtcNow, delivery, mountState),
-                cancellationToken);
-            await DeskProbes.Run(DeskProbes.StateGate, ProbeBudget,
-                ct => DashboardSnapshot.UpdateChecks(paths, ct, storage, branches), cancellationToken, waitForSlot: true);
+            var delivered = state.Delivered.Concat(signals.Select(signal => signal.Fingerprint)).Distinct().TakeLast(64).ToArray();
+            await Save(new DeskState.Diagnostics(samples, delivered, lowObservation ?? state.StorageWarning, now, delivery,
+                mountObservation ?? state.MountWarning, health), sent ? CancellationToken.None : cancellationToken);
             progress.Report(100);
         }
         finally
         {
             ScanGate.Release();
+        }
+    }
+
+    private async Task RecordIncidents(DateTimeOffset observedAt, bool? lowSpace, bool? missingMount, CancellationToken ct)
+    {
+        try
+        {
+            await DeskProbes.Run(DeskProbes.StateGate, ProbeBudget, token =>
+            {
+                DiagnosticIncidents.Record(paths, observedAt, lowSpace, missingMount, token);
+                return true;
+            }, ct, waitForSlot: true);
+        }
+        catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException or DeskProbeBusyException
+            || error is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            logger.LogWarning("VMS Expanded Admin Dashboard could not save diagnostic incident history.");
         }
     }
 
@@ -104,9 +118,7 @@ public sealed partial class ScheduledDiagnostics(
 
     private static bool IsLow(DeskProbes.Volume volume)
     {
-        var total = (double)volume.Total!.Value;
-        var reserve = Math.Min(.15 * total, Math.Max(30d * 1024 * 1024 * 1024, .10 * total));
-        return volume.Available!.Value <= reserve;
+        return volume.Available!.Value <= HealthDigest.Reserve(volume.Total!.Value);
     }
 
     private static DeskState.Sample[] AddDailySample(DeskState.Sample[] samples, DeskProbes.StorageReport report)
@@ -117,14 +129,14 @@ public sealed partial class ScheduledDiagnostics(
             .Append(new DeskState.Sample(report.SampledAt, usable)).TakeLast(120).ToArray();
     }
 
-    private Failure[] ReadFailures(DateTimeOffset? previousScan, CancellationToken ct)
+    private HealthAlerts.LogSignal[] ReadFailures(DateTimeOffset? previousScan, CancellationToken ct)
     {
         if (previousScan is null) return [];
         var catalog = _probes.ReadCatalog(ct);
         var recent = catalog.Files.Where(file => file.ModifiedAt >= previousScan.Value.AddMinutes(-2)).ToArray();
         var server = recent.Where(file => !file.Name.StartsWith("FFmpeg", StringComparison.OrdinalIgnoreCase)).Take(1);
         var ffmpeg = recent.Where(file => file.Name.StartsWith("FFmpeg", StringComparison.OrdinalIgnoreCase)).Take(3);
-        var failures = new List<Failure>();
+        var failures = new List<HealthAlerts.LogSignal>();
         foreach (var file in server.Concat(ffmpeg))
         {
             ct.ThrowIfCancellationRequested();
@@ -141,9 +153,7 @@ public sealed partial class ScheduledDiagnostics(
                 var line = excerpt.Content[start..end];
                 var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                     System.Text.Encoding.UTF8.GetBytes(file.Name + "\n" + line)));
-                failures.Add(new Failure(fingerprint, ff
-                    ? "A recent FFmpeg log contains a transcode or hardware acceleration failure."
-                    : "A recent Jellyfin server log contains a serious storage, memory, database, or transcode error."));
+                failures.Add(new HealthAlerts.LogSignal(fingerprint, ff, file.ModifiedAt));
             }
             catch (FileNotFoundException)
             {
@@ -152,8 +162,6 @@ public sealed partial class ScheduledDiagnostics(
         }
         return failures.ToArray();
     }
-
-    private sealed record Failure(string Key, string Label);
 
     [GeneratedRegex(@"no space left on device|disk quota exceeded|database disk image is malformed|outofmemoryexception|input/output error|ffmpeg exited with code [1-9]|error while opening encoder|error initializing output stream|conversion failed|device creation failed|no va display|failed to initialize (?:vaapi|qsv|cuda)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]

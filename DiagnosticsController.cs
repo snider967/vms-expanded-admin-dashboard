@@ -99,6 +99,19 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
         return await RunProbe(DeskProbes.StateGate, ct => DeskState.ReadNotifications(paths, ct), cancellationToken);
     }
 
+    [HttpGet("Incidents")]
+    public Task<IActionResult> Incidents(CancellationToken cancellationToken)
+    {
+        if (!IsAccountAdministrator()) return Task.FromResult<IActionResult>(Forbid());
+        return RunProbe(DeskProbes.StateGate, ct => DiagnosticIncidents.Read(paths, ct)
+            .OrderBy(incident => incident.ResolvedAt is not null).ThenByDescending(incident => incident.LastObservedAt)
+            .Select(incident => new
+            {
+                Label = DiagnosticIncidents.Label(incident.Kind),
+                incident.OpenedAt, incident.LastObservedAt, incident.ResolvedAt
+            }).ToArray(), cancellationToken);
+    }
+
     [HttpPost("Notifications/Test/{channel}")]
     public Task<IActionResult> TestNotification(string channel, CancellationToken ct)
     {
