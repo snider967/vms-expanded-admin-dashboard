@@ -43,9 +43,17 @@
         }
         #remoteAdminDesk .rad-plot-stack span { flex: 1; background: var(--rad-accent); border-radius: .2rem .2rem 0 0; }
         #remoteAdminDesk .rad-plot-stack span:nth-child(2) { background: #40b894; }
+        #remoteAdminDesk .rad-plot-stack[data-gap], #remoteAdminDesk .rad-plot-stack[data-partial] {
+            background: repeating-linear-gradient(135deg, transparent 0 4px, var(--rad-line) 4px 6px);
+        }
         #remoteAdminDesk .rad-plot-point time { display: block; padding-top: .35rem; white-space: nowrap; }
+        #remoteAdminDesk .rad-plot-point:last-child time { text-align: right; direction: rtl; }
+        #remoteAdminDesk .rad-plot-point:first-child time { text-align: left; }
         #remoteAdminDesk .rad-plot-legend { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: .65rem; font-size: .84em; }
         #remoteAdminDesk .rad-plot-data { font-size: .85rem; }
+        #remoteAdminDesk .rad-trend-value { font-size: 1.12rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+        #remoteAdminDesk .rad-volume { border-top: 1px solid var(--rad-line); padding: .6rem 0; }
+        #remoteAdminDesk .rad-volume summary { overflow-wrap: anywhere; cursor: pointer; }
         #remoteAdminDesk .rad-hero p { margin: .5em 0 0; }
         #remoteAdminDesk .rad-muted { opacity: .78; }
         #remoteAdminDesk .rad-metrics {
@@ -169,12 +177,12 @@
             </div>
             <div class="rad-top rad-section-head">
                 <div><h2 class="rad-overview-title">Trends</h2><p class="rad-muted" data-desk="visual-status" role="status">Loading the saved charts…</p></div>
-                <label>Activity window <select data-desk="visual-window"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+                <label>Time range <select data-desk="visual-window"><option value="1">24 hours</option><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
             </div>
             <div class="rad-grid">
-                <section class="rad-card rad-wide"><h2>Playback starts and sign-ins</h2><div data-desk="visual-activity"></div></section>
-                <section class="rad-card"><h2>Recent media additions</h2><div data-desk="visual-media"></div></section>
-                <section class="rad-card"><h2>Free-space history</h2><div data-desk="visual-capacity"></div></section>
+                <section class="rad-card"><h2>Playback starts and sign-ins</h2><div data-desk="visual-activity"></div></section>
+                <section class="rad-card"><h2>Indexed movies and episodes</h2><div data-desk="visual-media"></div></section>
+                <section class="rad-card rad-wide"><h2>Free space and runway</h2><div data-desk="visual-capacity"></div></section>
             </div>
             <div class="rad-section-head"><h2 class="rad-overview-title">Live server activity</h2></div>
             <div class="rad-grid">
@@ -604,27 +612,58 @@ const DeskAnalysis = (() => {
         });
     }
 
-    function trendBuckets(rows, days, measuredAt, coverageStart, keys) {
-        const end = Math.floor(Date.parse(measuredAt) / day) * day;
-        const oldest = Math.max(end - (days - 1) * day,
-            coverageStart ? Math.floor(Date.parse(coverageStart) / day) * day : -Infinity);
+    function trendRange(days, measuredAt) {
+        const sampledAt = Date.parse(measuredAt);
+        const hourly = days === 1;
+        const size = hourly ? day / 24 : day;
+        const count = hourly ? 24 : days;
+        const start = hourly ? sampledAt - day : Math.floor(sampledAt / day) * day - (days - 1) * day;
         const width = days > 30 ? 7 : days > 14 ? 3 : 1;
-        const indexed = new Map(rows.map(row => [Date.parse(row.date), row]));
-        const buckets = [];
-        for (let start = oldest; start <= end; start += width * day) {
-            const stop = Math.min(end, start + (width - 1) * day);
-            const values = keys.map(key => {
-                let total = 0;
-                for (let date = start; date <= stop; date += day) total += indexed.get(date)?.[key] || 0;
-                return total;
-            });
-            buckets.push({ date: new Date(start).toISOString().slice(0, 10), values });
+        return { sampledAt, hourly, start, size, count, width };
+    }
+
+    function trendBuckets(rows, range, firstCovered, keys) {
+        const { hourly, start, size, count, width } = range;
+        const indexed = new Map(rows.map(row => [hourly ? row.hour : (Date.parse(row.date) - start) / size, row]));
+        return Array.from({ length: Math.ceil(count / width) }, (_, bucket) => {
+            const first = bucket * width;
+            const length = Math.min(width, count - first);
+            const values = keys.map(() => 0);
+            let covered = 0;
+            for (let i = first; i < first + length; i++) {
+                if (start + i * size < firstCovered) continue;
+                covered++;
+                const row = indexed.get(i);
+                keys.forEach((key, index) => { values[index] += row?.[key] || 0; });
+            }
+            return { start: start + first * size, length, covered, values: covered ? values : null };
+        });
+    }
+
+    function capacityTrend(volume, range) {
+        const { sampledAt, hourly, start, size, count, width } = range;
+        const buckets = trendBuckets([], range, Infinity, []);
+        const history = [];
+        const observedUnits = new Set();
+        for (const point of volume.days) {
+            const timestamp = Date.parse(point.sampledAt || point.date);
+            if (!Number.isFinite(timestamp) || timestamp > sampledAt) continue;
+            history.push({ timestamp, volumes: [{ mount: volume.mount, total: volume.totalBytes, available: point.freeBytes }] });
+            if (timestamp < start || (hourly && !point.sampledAt)) continue;
+            const unit = Math.min(count - 1, Math.floor((timestamp - start) / size));
+            const bucket = buckets[Math.floor(unit / width)];
+            bucket.values = [point.freeBytes];
+            bucket.measuredAt = timestamp;
+            if (!observedUnits.has(unit)) bucket.covered++;
+            observedUnits.add(unit);
         }
-        return buckets;
+        const latest = history.at(-1);
+        const projection = volume.totalBytes > 0 && latest ? forecast(history, latest.volumes[0]) : null;
+        return { buckets, observations: observedUnits.size, projection, latestAt: latest?.timestamp };
     }
 
     return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts,
-        activityBuckets, matchesVersion, livePlayback, trendBuckets };
+        activityBuckets, matchesVersion, livePlayback, trendRange, trendBuckets, capacityTrend };
 })();
 
         const page = document.getElementById("remoteAdminDesk");
@@ -896,41 +935,52 @@ const DeskAnalysis = (() => {
             }
         }
 
-        const formatDay = iso => new Date(iso + "T00:00:00Z").toLocaleDateString(undefined,
-            { month: "short", day: "numeric", timeZone: "UTC" });
+        const trendDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+        const trendHour = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" });
+        const countFormat = new Intl.NumberFormat();
 
-        function plot(points, labels, format = String) {
+        function plot(points, labels, range, format = countFormat.format, maximum) {
             const figure = document.createElement("figure");
             figure.className = "rad-plot";
             const bars = document.createElement("div");
             bars.className = "rad-plot-bars";
             bars.setAttribute("aria-hidden", "true");
-            const max = Math.max(1, ...points.flatMap(point => point.values));
+            const max = maximum || Math.max(1, ...points.flatMap(point => point.values || []));
             const details = document.createElement("details");
             details.className = "rad-plot-data";
             const summary = document.createElement("summary");
             summary.textContent = "Chart values";
             const values = document.createElement("ul");
             for (const [index, point] of points.entries()) {
-                const label = labels.map((name, i) => name + " " + format(point.values[i])).join(" · ");
+                const start = point.start;
+                const end = start + (point.length - 1) * range.size;
+                const period = range.hourly ? trendDay.format(start) + " " + trendHour.format(start) + "–"
+                    + trendHour.format(start + range.size)
+                    : trendDay.format(start) + (end > start ? "–" + trendDay.format(end) : "");
+                const partial = point.covered > 0 && point.covered < point.length;
+                const label = point.values ? labels.map((name, i) => name + " " + format(point.values[i])).join(" · ")
+                    + (point.measuredAt !== undefined ? " · Last reading " + trendDay.format(point.measuredAt) : "")
+                    + (partial ? " · " + point.covered + " of " + point.length + " days covered" : "") : "No coverage";
                 const column = document.createElement("div");
                 column.className = "rad-plot-point";
-                column.title = formatDay(point.date) + " · " + label;
+                column.title = period + " UTC · " + label;
                 const stack = document.createElement("div");
                 stack.className = "rad-plot-stack";
-                for (const value of point.values) {
+                stack.toggleAttribute("data-gap", !point.values);
+                stack.toggleAttribute("data-partial", partial);
+                for (const value of point.values || []) {
                     const bar = document.createElement("span");
                     bar.style.height = 100 * value / max + "%";
                     stack.append(bar);
                 }
                 const time = document.createElement("time");
-                time.dateTime = point.date;
+                time.dateTime = new Date(start).toISOString();
                 if (index === 0 || index === Math.floor(points.length / 2) || index === points.length - 1)
-                    time.textContent = formatDay(point.date);
+                    time.textContent = (range.hourly ? trendHour : trendDay).format(start);
                 column.append(stack, time);
                 bars.append(column);
                 const item = document.createElement("li");
-                item.textContent = formatDay(point.date) + " · " + label;
+                item.textContent = column.title;
                 values.append(item);
             }
             const legend = document.createElement("div");
@@ -948,35 +998,91 @@ const DeskAnalysis = (() => {
             return figure;
         }
 
+        function trendText(text, className = "rad-muted") {
+            const line = document.createElement("p");
+            line.className = className;
+            line.textContent = text;
+            return line;
+        }
+
+        function freshness(value) {
+            const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+            const hours = Math.floor(elapsed / 3600000);
+            return formatDate(new Date(value).toISOString()) + " · "
+                + (hours >= 48 ? Math.floor(hours / 24) + " days ago" : hours ? hours + "h ago" : "under 1h ago");
+        }
+
+        function renderEventTrend(fieldName, range, rows, firstCovered, keys, labels, source) {
+            if (!rows) {
+                status(fieldName, "Hourly history will appear after the next collection.");
+                return;
+            }
+            const points = DeskAnalysis.trendBuckets(rows, range, firstCovered, keys);
+            const covered = points.reduce((sum, point) => sum + point.covered, 0);
+            const unit = range.hourly ? "hours" : "days";
+            const caption = trendText(source + " · " + covered + "/" + range.count + " " + unit + " covered");
+            if (!covered) {
+                field(fieldName).replaceChildren(caption, trendText("Insufficient history for this range."));
+                return;
+            }
+            const totals = labels.map((name, index) => countFormat.format(
+                points.reduce((sum, point) => sum + (point.values?.[index] || 0), 0)) + " " + name.toLowerCase());
+            field(fieldName).replaceChildren(trendText(totals.join(" · "), "rad-trend-value"), caption,
+                plot(points, labels, range));
+        }
+
         function renderCharts() {
             if (!charts) return;
             const days = Number(field("visual-window").value);
-            status("visual-status", "Updated " + formatDate(charts.sampledAt)
-                + (charts.activityCoverageStart ? " · Activity sample capped at 500 account events" : "") + " · UTC dates");
-            const recent = DeskAnalysis.trendBuckets(charts.activity, days, charts.sampledAt, charts.activityCoverageStart,
-                ["starts", "signIns"]);
-            if (recent.some(point => point.values.some(Boolean))) field("visual-activity").replaceChildren(plot(recent,
-                ["Playback starts", "Sign-ins"]));
-            else status("visual-activity", "No playback starts or sign-ins in the sampled window.");
+            const range = DeskAnalysis.trendRange(days, charts.sampledAt);
+            status("visual-status", "Snapshot " + freshness(charts.sampledAt) + " · Chart dates and times in UTC");
+            const activityBoundary = charts.activityCoverageStart || charts.oldestRecordedActivity;
+            const activityStart = activityBoundary ? Date.parse(activityBoundary) + 1
+                : charts.activityHours ? Infinity : Date.parse(charts.activity[0]?.date) || Infinity;
+            renderEventTrend("visual-activity", range, range.hourly ? charts.activityHours : charts.activity,
+                activityStart, ["starts", "signIns"], ["Playback starts", "Sign-ins"],
+                charts.activityCoverageStart ? "Latest 500 account events" : "From retained Jellyfin account events");
             const media = charts.media;
             if (media) {
-                const additions = DeskAnalysis.trendBuckets(media.days, 14, media.sampledAt, media.coverageStart, ["movies", "episodes"]);
-                const caption = document.createElement("p");
-                caption.className = "rad-muted";
-                caption.textContent = "Checked " + formatDate(media.sampledAt) + (media.coverageStart ? " · Latest 120 items" : "");
-                field("visual-media").replaceChildren(caption, additions.some(point => point.values.some(Boolean))
-                    ? plot(additions, ["Movies", "Episodes"]) : "No additions in the sampled window.");
+                const mediaRange = DeskAnalysis.trendRange(days, media.sampledAt);
+                const storedRange = DeskAnalysis.trendRange(media.hours ? 90 : 30, media.sampledAt);
+                const mediaStart = Math.max(storedRange.start, media.coverageStart ? Date.parse(media.coverageStart) + 1 : -Infinity);
+                renderEventTrend("visual-media", mediaRange, mediaRange.hourly ? media.hours : media.days, mediaStart,
+                    ["movies", "episodes"], ["Movies", "Episodes"],
+                    "Checked " + freshness(media.sampledAt) + (media.coverageStart ? " · Latest 120 indexed items" : ""));
             } else status("visual-media", "Run the new movies and TV task to collect the first sample.");
-            field("visual-capacity").replaceChildren(...(charts.capacity.length
-                ? charts.capacity.map((volume, index) => {
-                    const details = document.createElement("details");
-                    details.open = index === 0;
-                    const summary = document.createElement("summary");
-                    summary.textContent = volume.mount + " · " + bytes(volume.days.at(-1).freeBytes) + " free";
-                    details.append(summary, plot(volume.days.slice(-12).map(day => ({ date: day.date, values: [day.freeBytes] })),
-                        ["Free space"], bytes));
-                    return details;
-                }) : ["Run the Diagnostic Scan or Check free space to collect the first sample."]));
+            const expanded = new Set(Array.from(field("visual-capacity").querySelectorAll("details[open]"), node => node.dataset.mount));
+            const firstRender = !field("visual-capacity").querySelector("details");
+            field("visual-capacity").replaceChildren(...(charts.capacity.length ? charts.capacity.map((volume, index) => {
+                const details = document.createElement("details");
+                details.className = "rad-volume";
+                details.dataset.mount = volume.mount;
+                details.open = (firstRender && index === 0) || expanded.has(volume.mount);
+                const summary = document.createElement("summary");
+                summary.textContent = volume.mount + " · " + bytes(volume.days.at(-1).freeBytes) + " free";
+                const { buckets, observations, projection, latestAt } = DeskAnalysis.capacityTrend(volume, range);
+                const latest = volume.days.at(-1);
+                const asOf = latest.sampledAt ? freshness(latestAt) : trendDay.format(latestAt) + " UTC";
+                const caption = trendText("Last reading " + asOf + " · " + observations + "/"
+                    + range.count + (range.hourly ? " hours" : " days") + " sampled"
+                    + (range.width > 1 ? " · latest reading per chart bar" : ""));
+                const estimate = projection?.results.find(result => result.window === days);
+                let runway = "Insufficient comparable history for a runway estimate.";
+                if (projection && latest.freeBytes <= projection.reserve)
+                    runway = "At or below the " + bytes(projection.reserve) + " free-space reserve.";
+                else if (estimate)
+                    runway = estimate.days === null ? "No net space loss across " + Math.round(estimate.span) + " sampled days."
+                        : "Estimated " + (estimate.days > 365 ? "over 365" : Math.ceil(estimate.days)) + " days to the "
+                            + bytes(projection.reserve) + " reserve · " + bytes(estimate.rate) + "/day net space loss";
+                else if (range.hourly && projection)
+                    runway = "Select a range of 7 days or more for a runway estimate.";
+                if (latestAt < range.start) runway = "No readings in this range. Runway estimate unavailable.";
+                details.append(summary, caption, trendText(runway, "rad-trend-value"));
+                if (volume.baselineChanged || projection?.reset) details.append(trendText(
+                    "The runway baseline restarted after a volume change or major cleanup."));
+                if (observations) details.append(plot(buckets, ["Free space"], range, bytes, volume.totalBytes));
+                return details;
+            }) : ["Run the Diagnostic Scan or Check free space to collect the first sample."]));
         }
         field("visual-window").addEventListener("change", renderCharts);
 
@@ -990,6 +1096,9 @@ const DeskAnalysis = (() => {
             if (result.charts && (!charts || Date.parse(result.charts.sampledAt) > Date.parse(charts.sampledAt))) {
                 charts = result.charts;
                 renderCharts();
+            } else if (charts) {
+                const notice = "Snapshot " + freshness(charts.sampledAt) + " · Chart dates and times in UTC";
+                if (field("visual-status").textContent !== notice) status("visual-status", notice);
             } else if (!charts) {
                 status("visual-status", "Run Update visual dash in Jellyfin Scheduled Tasks to create the first charts.");
                 for (const name of ["visual-activity", "visual-media", "visual-capacity"]) status(name, "Awaiting chart refresh.");
