@@ -1,4 +1,8 @@
+using Jellyfin.Data.Enums;
 using Jellyfin.Data.Queries;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Tasks;
@@ -25,8 +29,95 @@ internal static class DashboardSnapshot
         MediaHistory? Media, Capacity[] Capacity, ActivityHour[]? ActivityHours = null,
         DateTimeOffset? OldestRecordedActivity = null);
 
-    internal static int HourIndex(DateTimeOffset value, DateTimeOffset sampledAt) =>
+    private static int HourIndex(DateTimeOffset value, DateTimeOffset sampledAt) =>
         Math.Min(23, (int)Math.Floor((value - sampledAt.AddHours(-24)).TotalHours));
+
+    internal static DateTime WindowStart(DateTimeOffset sampledAt) =>
+        sampledAt.UtcDateTime.Date.AddDays(1 - HistoryDays);
+
+    // Daily totals are aligned to UTC dates. The hourly view uses a rolling 24 hours.
+    private static void Count(DateTime date, DateTimeOffset sampledAt, int[] days, int[] hours, DateTime start)
+    {
+        date = date.ToUniversalTime();
+        if (date < start || date > sampledAt.UtcDateTime) return;
+
+        days[(date.Date - start).Days]++;
+        var hour = HourIndex(date, sampledAt);
+        if (hour >= 0) hours[hour]++;
+    }
+
+    internal static async Task<(ActivityDay[] Days, ActivityHour[] Hours)> CollectActivity(
+        IActivityManager activityManager, DateTimeOffset sampledAt, CancellationToken ct)
+    {
+        var start = WindowStart(sampledAt);
+        var starts = new int[HistoryDays];
+        var signIns = new int[HistoryDays];
+        var hourlyStarts = new int[24];
+        var hourlySignIns = new int[24];
+        foreach (var (type, days, hours) in new[]
+        {
+            ("VideoPlayback", starts, hourlyStarts),
+            ("AudioPlayback", starts, hourlyStarts),
+            ("GamePlayback", starts, hourlyStarts),
+            ("AuthenticationSucceeded", signIns, hourlySignIns)
+        })
+        {
+            ct.ThrowIfCancellationRequested();
+            var result = await activityManager.GetPagedResultAsync(new ActivityLogQuery
+            {
+                HasUserId = true,
+                MinDate = start.AddTicks(-1),
+                MaxDate = sampledAt.UtcDateTime.AddTicks(1),
+                Type = type,
+                // A missing limit defaults to 100 in Jellyfin 12.4.
+                Limit = int.MaxValue
+            });
+            ct.ThrowIfCancellationRequested();
+            if (result.TotalRecordCount > result.Items.Count)
+                throw new IOException("Jellyfin returned an incomplete dashboard activity query.");
+
+            foreach (var entry in result.Items)
+                Count(entry.Date, sampledAt, days, hours, start);
+        }
+
+        return (
+            Enumerable.Range(0, HistoryDays).Where(i => starts[i] > 0 || signIns[i] > 0)
+                .Select(i => new ActivityDay(DateOnly.FromDateTime(start.AddDays(i)), starts[i], signIns[i])).ToArray(),
+            Enumerable.Range(0, 24).Where(i => hourlyStarts[i] > 0 || hourlySignIns[i] > 0)
+                .Select(i => new ActivityHour(i, hourlyStarts[i], hourlySignIns[i])).ToArray());
+    }
+
+    internal static MediaHistory CollectMedia(ILibraryManager library, DateTimeOffset sampledAt, CancellationToken ct)
+    {
+        var start = WindowStart(sampledAt);
+        var movies = new int[HistoryDays];
+        var episodes = new int[HistoryDays];
+        var hourlyMovies = new int[24];
+        var hourlyEpisodes = new int[24];
+        ct.ThrowIfCancellationRequested();
+        var items = library.GetItemList(new InternalItemsQuery
+        {
+            Recursive = true,
+            IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Episode],
+            IsVirtualItem = false,
+            EnableTotalRecordCount = false,
+            MinDateCreated = start.AddTicks(-1)
+        });
+        foreach (var item in items)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (item is Episode)
+                Count(item.DateCreated, sampledAt, episodes, hourlyEpisodes, start);
+            else
+                Count(item.DateCreated, sampledAt, movies, hourlyMovies, start);
+        }
+
+        return new MediaHistory(sampledAt, null,
+            Enumerable.Range(0, HistoryDays).Where(i => movies[i] > 0 || episodes[i] > 0)
+                .Select(i => new MediaDay(DateOnly.FromDateTime(start.AddDays(i)), movies[i], episodes[i])).ToArray(),
+            Enumerable.Range(0, 24).Where(i => hourlyMovies[i] > 0 || hourlyEpisodes[i] > 0)
+                .Select(i => new MediaHour(i, hourlyMovies[i], hourlyEpisodes[i])).ToArray());
+    }
 
     internal static Checks ReadChecks(IApplicationPaths paths, CancellationToken ct) =>
         DeskState.Read<Checks>(paths, ChecksFile, ct) ?? new Checks();
@@ -36,7 +127,7 @@ internal static class DashboardSnapshot
 
     // The caller holds StateGate across each read, merge and write.
     internal static bool UpdateChecks(IApplicationPaths paths, CancellationToken ct,
-        DeskProbes.StorageReport? storage = null, TimedBranches? branches = null, MediaHistory? media = null)
+        DeskProbes.StorageReport? storage = null, TimedBranches? branches = null)
     {
         var current = ReadChecks(paths, ct);
         if (storage is { Problem: null })
@@ -58,8 +149,6 @@ internal static class DashboardSnapshot
         if (branches is not null && branches.Result.Problem is null
             && (current.Branches is null || current.Branches.SampledAt < branches.SampledAt))
             current = current with { Branches = branches };
-        if (media is not null && (current.Media is null || current.Media.SampledAt < media.SampledAt))
-            current = current with { Media = media };
         return DeskState.Save(paths, ChecksFile, current, ct);
     }
 
@@ -93,59 +182,37 @@ internal static class DashboardSnapshot
         DeskState.Save(paths, ChartsFile, charts, ct);
 }
 
-public sealed class UpdateVisualDashboard(IActivityManager activityManager, IApplicationPaths paths) : IScheduledTask
+public sealed class UpdateVisualDashboard(
+    IActivityManager activityManager, ILibraryManager library, IApplicationPaths paths) : IScheduledTask
 {
-    private const int ActivityLimit = 500;
     private static readonly SemaphoreSlim RefreshGate = new(1, 1);
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan CollectionBudget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StateBudget = TimeSpan.FromSeconds(3);
 
     public string Name => "Update visual dash";
     public string Key => "RemoteAdminDeskVisual";
-    public string Description => "Refresh the Overview charts from recorded account activity and saved media and storage samples.";
+    public string Description => "Refresh the Overview charts from recorded account activity, library additions and saved storage samples.";
     public string Category => Plugin.DisplayName;
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => [];
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        await DeskProbes.RunAsync(RefreshGate, Budget, async ct =>
+        await DeskProbes.RunAsync(RefreshGate, CollectionBudget, async ct =>
         {
             var now = DateTimeOffset.UtcNow;
-            var since = now.UtcDateTime.Date.AddDays(1 - DashboardSnapshot.HistoryDays);
-            var result = await activityManager.GetPagedResultAsync(new ActivityLogQuery
-            {
-                HasUserId = true,
-                MinDate = since,
-                Limit = ActivityLimit
-            });
-            ct.ThrowIfCancellationRequested();
-            var entries = result.Items.Where(entry => entry.Date.ToUniversalTime() <= now.UtcDateTime).ToArray();
-            var activity = entries.Where(entry => IsPlaybackStart(entry.Type) || entry.Type == "AuthenticationSucceeded").ToArray();
-            var history = activity.GroupBy(entry => DateOnly.FromDateTime(entry.Date.ToUniversalTime()))
-                .Select(day => new DashboardSnapshot.ActivityDay(day.Key,
-                    day.Count(entry => IsPlaybackStart(entry.Type)),
-                    day.Count(entry => entry.Type == "AuthenticationSucceeded")))
-                .OrderBy(day => day.Date).ToArray();
-            var hours = activity.GroupBy(entry => DashboardSnapshot.HourIndex(entry.Date.ToUniversalTime(), now))
-                .Where(hour => hour.Key >= 0)
-                .Select(hour => new DashboardSnapshot.ActivityHour(hour.Key,
-                    hour.Count(entry => IsPlaybackStart(entry.Type)),
-                    hour.Count(entry => entry.Type == "AuthenticationSucceeded")))
-                .OrderBy(hour => hour.Hour).ToArray();
-            DateTimeOffset? oldest = entries.Length == 0 ? null : entries.Min(entry => entry.Date.ToUniversalTime());
-            var capped = result.Items.Count >= ActivityLimit || result.TotalRecordCount > result.Items.Count;
-            return await DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
+            var (history, hours) = await DashboardSnapshot.CollectActivity(activityManager, now, ct);
+            var media = DashboardSnapshot.CollectMedia(library, now, ct);
+            return await DeskProbes.Run(DeskProbes.StateGate, StateBudget, token =>
             {
                 var previous = DashboardSnapshot.ReadCharts(paths, token);
                 if (previous is not null && previous.SampledAt >= now) return true;
                 var checks = DashboardSnapshot.ReadChecks(paths, token);
                 var storageHistory = DashboardSnapshot.MergeStorageHistory(checks, DeskState.ReadDiagnostics(paths, token));
-                var charts = new DashboardSnapshot.Charts(now, capped ? oldest ?? now : null, history, checks.Media,
-                    DashboardSnapshot.CapacityHistory(storageHistory, now), hours, oldest);
+                var charts = new DashboardSnapshot.Charts(now, null, history, media,
+                    DashboardSnapshot.CapacityHistory(storageHistory, now), hours);
                 return DashboardSnapshot.SaveCharts(paths, charts, token);
             }, ct, waitForSlot: true);
         }, cancellationToken);
         progress.Report(100);
     }
-
-    private static bool IsPlaybackStart(string? type) => type is "VideoPlayback" or "AudioPlayback" or "GamePlayback";
 }
