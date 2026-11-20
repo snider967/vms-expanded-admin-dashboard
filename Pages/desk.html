@@ -84,6 +84,12 @@
         #remoteAdminDesk .rad-row-title, #remoteAdminDesk .rad-row-detail { display: block; }
         #remoteAdminDesk .rad-row-title { font-weight: 600; }
         #remoteAdminDesk .rad-row-detail { margin-top: .22rem; font-size: .88em; opacity: .78; }
+        #remoteAdminDesk .rad-transcode summary { padding-block: .3rem; }
+        #remoteAdminDesk .rad-transcode summary .rad-row-detail { margin-inline-start: .95rem; }
+        #remoteAdminDesk .rad-transcode-body { margin: .35rem 0 .2rem .95rem; }
+        #remoteAdminDesk .rad-transcode-meta { display: flex; flex-wrap: wrap; gap: .35rem 1.2rem; margin: .65rem 0; }
+        #remoteAdminDesk .rad-transcode-meta dt { font-size: .8em; opacity: .8; }
+        #remoteAdminDesk .rad-transcode-meta dd { margin: .12rem 0 0; font-variant-numeric: tabular-nums; }
         #remoteAdminDesk .rad-report { margin-bottom: 1rem; }
         #remoteAdminDesk .rad-tabs { display: flex; gap: .2rem; flex-wrap: wrap; border-bottom: 1px solid var(--rad-line); margin-bottom: 1rem; }
         #remoteAdminDesk .rad-tab {
@@ -203,7 +209,7 @@
                 </section>
                 <section class="rad-card rad-wide">
                     <div class="rad-top"><h2>Playback troubleshooting</h2><button is="emby-button" type="button" class="raised" data-desk="read-triage">Check recent transcodes</button></div>
-                    <p class="rad-muted" data-desk="triage-status" role="status">Compare recent FFmpeg evidence with the current streams above.</p>
+                    <p class="rad-muted" data-desk="triage-status" role="status">Review encoder evidence and recent output from FFmpeg logs.</p>
                     <ul class="rad-data" data-desk="triage-logs"></ul>
                 </section>
             </div>
@@ -692,8 +698,18 @@ const DeskAnalysis = (() => {
         return [...capacity].sort((left, right) => total(right) - total(left));
     }
 
+    function playbackLogSummary(log) {
+        const type = log.name.match(/^FFmpeg[._-](Transcode|Remux|DirectStream)[._-]/i)?.[1].toLowerCase();
+        const title = { transcode: "Transcode", remux: "Remux", directstream: "Direct stream" }[type] || "FFmpeg log";
+        const encoder = log.encoders.map(({ encoder, acceleration }) => encoder + " · " + acceleration).join(", ")
+            || (type === "remux" ? "No video encoder identified" : "Video encoder unknown");
+        const count = log.signalCount;
+        const issue = count ? count + (count === 1 ? " matching error line" : " matching error lines") : null;
+        return { title, encoder, issue };
+    }
+
     return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts,
-        activityBuckets, matchesVersion, livePlayback, trendRange, trendBuckets, capacityTrend, largestVolumesFirst };
+        activityBuckets, matchesVersion, livePlayback, trendRange, trendBuckets, capacityTrend, largestVolumesFirst, playbackLogSummary };
 })();
 
         const page = document.getElementById("remoteAdminDesk");
@@ -1436,11 +1452,10 @@ const DeskAnalysis = (() => {
 
         async function readTriage(saved) {
             if (!saved) {
-                status("triage-status", "Reading the latest FFmpeg log excerpts…");
+                status("triage-status", "Checking the four most recent FFmpeg logs…");
                 const result = await read("RemoteAdminDesk/PlaybackTriage", undefined, 64 * 1024);
-                const counts = result.logs.map(log => log.signals.length);
-                const compact = { ...result, logs: result.logs.map(({ signals, ...log }, i) => ({ ...log, count: counts[i] })) };
-                saved = rememberCheck("triage", compact);
+                const compact = { ...result, logs: result.logs.map(({ signals, ...log }) => log) };
+                saved = rememberCheck("triage-v2", compact);
                 renderTriage(saved, result.logs);
             } else renderTriage(saved);
         }
@@ -1448,24 +1463,98 @@ const DeskAnalysis = (() => {
         function renderTriage(saved, logs = saved.result.logs) {
             const result = saved.result;
             status("triage-status", (logs.length
-                ? "Recent FFmpeg logs sorted by time. Encoder evidence is scoped to each log."
-                : "No recent FFmpeg transcode logs were found.") + " Checked " + formatDate(saved.sampledAt) + ".");
-            setList("triage-logs", logs.map(log => {
-                const encoders = log.encoders?.map(evidence => evidence.encoder + " · " + evidence.acceleration);
-                const acceleration = encoders?.length ? encoders.join(", ") : "Video encoder unknown";
-                if (!log.signals) return row(formatDate(log.modifiedAt) + " · " + log.name,
-                    acceleration + " · " + log.count + " matching lines");
-                const details = document.createElement("details");
-                const title = document.createElement("summary");
-                title.textContent = formatDate(log.modifiedAt) + " · " + log.name
-                    + " · " + acceleration + (log.truncated ? " · tail excerpt" : "");
-                const evidence = document.createElement("pre");
-                evidence.textContent = log.signals.join("\n") || "No common encoding or playback signal in this excerpt.";
-                details.append(title, evidence);
-                return details;
-            }));
-            report.triage = { sampledAt: saved.sampledAt, logs: result.logs.length, withSignals: result.logs.filter(log => log.count).length,
+                ? "Recent FFmpeg logs, newest first. Encoder and progress details come from each log."
+                : "No recent FFmpeg logs were found.") + " Checked " + formatDate(result.checkedAt) + ".");
+            setList("triage-logs", logs.map(renderPlaybackLog));
+            report.triage = { sampledAt: result.checkedAt, logs: logs.length, withSignals: logs.filter(log => log.signalCount > 0).length,
                 catalogLimited: result.limited };
+        }
+
+        function renderPlaybackLog(log) {
+            const info = DeskAnalysis.playbackLogSummary(log);
+            const details = document.createElement("details");
+            details.className = "rad-transcode";
+            const summary = document.createElement("summary");
+            const title = document.createElement("strong");
+            title.textContent = info.title + " · " + formatDate(log.modifiedAt);
+            const subtitle = document.createElement("span");
+            subtitle.className = "rad-row-detail";
+            subtitle.textContent = [info.encoder, info.issue].filter(Boolean).join(" · ");
+            summary.append(title, subtitle);
+            const body = document.createElement("div");
+            body.className = "rad-transcode-body";
+            const size = log.bytes < 1024 ? log.bytes + " B" : countFormat.format(Math.ceil(log.bytes / 1024)) + " KiB";
+            body.append(trendText(log.name + " · " + size));
+            if (log.progress) {
+                const { position, frames, fps, speed, dropped } = log.progress;
+                const stats = document.createElement("dl");
+                stats.className = "rad-transcode-meta";
+                for (const [label, value] of [["Encoded through", position], ["Frames", frames],
+                    ["Frame rate", fps && fps + " fps"], ["Speed", speed], ["Dropped frames", dropped]]) {
+                    if (value == null) continue;
+                    const group = document.createElement("div");
+                    const term = document.createElement("dt");
+                    const entry = document.createElement("dd");
+                    term.textContent = label;
+                    entry.textContent = value;
+                    group.append(term, entry);
+                    stats.append(group);
+                }
+                body.append(stats);
+            }
+            if (log.sampledLines === 0) body.append(trendText("No text was available in the sampled log output."));
+            else if (!log.signalCount) body.append(trendText("No matching error lines in the sampled output."));
+            else if (log.signals?.length) {
+                const evidence = document.createElement("pre");
+                evidence.textContent = log.signals.join("\n");
+                body.append(trendText(log.signalCount > log.signals.length ? "Most recent matching error lines" : "Matching error lines"), evidence);
+            } else body.append(trendText(info.issue + " in the saved check. Read the raw tail for context."));
+            body.append(rawPlaybackTail(log.name));
+            details.append(summary, body);
+            return details;
+        }
+
+        function rawPlaybackTail(name) {
+            const container = document.createElement("div");
+            const button = document.createElement("button", { is: "emby-button" });
+            button.type = "button";
+            button.className = "raised";
+            button.textContent = "Read raw log tail";
+            button.setAttribute("aria-expanded", "false");
+            const feedback = trendText("");
+            feedback.setAttribute("role", "status");
+            const raw = document.createElement("pre");
+            raw.hidden = true;
+            raw.tabIndex = 0;
+            raw.setAttribute("aria-label", "Raw FFmpeg log tail");
+            button.addEventListener("click", async () => {
+                if (!raw.hidden) {
+                    raw.hidden = true;
+                    raw.textContent = "";
+                    button.setAttribute("aria-expanded", "false");
+                    button.textContent = "Read raw log tail";
+                    feedback.textContent = "";
+                    return;
+                }
+                button.disabled = true;
+                feedback.textContent = "Reading private log output…";
+                const navigation = signal;
+                try {
+                    const result = await read("RemoteAdminDesk/LogTail", { name });
+                    raw.textContent = result.content.replace(/\r\n?/g, "\n");
+                    raw.hidden = !raw.textContent.trim();
+                    button.textContent = raw.hidden ? "Read raw log tail" : "Hide raw log tail";
+                    button.setAttribute("aria-expanded", String(!raw.hidden));
+                    feedback.textContent = raw.hidden ? "This log has no readable output."
+                        : (result.truncated ? "Showing up to 96 KiB from the end of the log." : "Showing the entire log.");
+                } catch (error) {
+                    if (!navigation.aborted) feedback.textContent = problem(error);
+                } finally {
+                    button.disabled = false;
+                }
+            });
+            container.append(button, feedback, raw);
+            return container;
         }
 
         const arrProblems = {
@@ -1675,7 +1764,7 @@ const DeskAnalysis = (() => {
             status("media-test-status", "");
             status("overview-history-status", "View successful logins, connected sessions, and stream starts from recorded Jellyfin activity.");
             status("branch-status", "Check free space and detect missing configured branch mounts.");
-            status("triage-status", "Compare recent FFmpeg evidence with the current streams above.");
+            status("triage-status", "Review encoder evidence and recent output from FFmpeg logs.");
             status("import-status", "Check current downloads and the reasons reported for import warnings or failures.");
             status("import-history-status", "Check recent grabs, imports, failures, and ignored downloads. Imported files are matched by exact path against a recent Jellyfin sample.");
             savedSettings = null;
@@ -1716,7 +1805,7 @@ const DeskAnalysis = (() => {
                 field("snapshot").hidden = false;
                 field("server").hidden = false;
                 for (const [name, operation] of [["additions", readAdditions], ["usage", readUsage], ["logs", readLogs],
-                    ["triage", readTriage], ["imports", readImports], ["import-history", readImportHistory], ["notifications", readNotifications]]) {
+                    ["triage-v2", readTriage], ["imports", readImports], ["import-history", readImportHistory], ["notifications", readNotifications]]) {
                     const saved = savedCheck(name);
                     if (saved) {
                         try { await operation(saved); }
