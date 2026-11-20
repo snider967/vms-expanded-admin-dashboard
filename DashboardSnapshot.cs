@@ -9,16 +9,24 @@ internal static class DashboardSnapshot
 {
     private const string ChecksFile = "dashboard-checks.json";
     private const string ChartsFile = "dashboard-charts.json";
+    internal const int HistoryDays = 90;
     internal sealed record TimedBranches(DateTimeOffset SampledAt, DeskProbes.BranchReport Result);
     internal sealed record MediaDay(DateOnly Date, int Movies, int Episodes);
-    internal sealed record MediaHistory(DateTimeOffset SampledAt, DateTimeOffset? CoverageStart, MediaDay[] Days);
+    internal sealed record MediaHour(int Hour, int Movies, int Episodes);
+    internal sealed record MediaHistory(DateTimeOffset SampledAt, DateTimeOffset? CoverageStart, MediaDay[] Days,
+        MediaHour[]? Hours = null);
     internal sealed record ActivityDay(DateOnly Date, int Starts, int SignIns);
-    internal sealed record VolumeDay(DateOnly Date, long FreeBytes);
-    internal sealed record Capacity(string Mount, VolumeDay[] Days);
+    internal sealed record ActivityHour(int Hour, int Starts, int SignIns);
+    internal sealed record VolumeDay(DateOnly Date, long FreeBytes, DateTimeOffset? SampledAt = null);
+    internal sealed record Capacity(string Mount, VolumeDay[] Days, long? TotalBytes = null, bool BaselineChanged = false);
     internal sealed record Checks(DeskProbes.StorageReport? Storage = null, TimedBranches? Branches = null,
         MediaHistory? Media = null, DeskState.Sample[]? StorageHistory = null);
     internal sealed record Charts(DateTimeOffset SampledAt, DateTimeOffset? ActivityCoverageStart, ActivityDay[] Activity,
-        MediaHistory? Media, Capacity[] Capacity);
+        MediaHistory? Media, Capacity[] Capacity, ActivityHour[]? ActivityHours = null,
+        DateTimeOffset? OldestRecordedActivity = null);
+
+    internal static int HourIndex(DateTimeOffset value, DateTimeOffset sampledAt) =>
+        Math.Min(23, (int)Math.Floor((value - sampledAt.AddHours(-24)).TotalHours));
 
     internal static Checks ReadChecks(IApplicationPaths paths, CancellationToken ct) =>
         DeskState.Read<Checks>(paths, ChecksFile, ct) ?? new Checks();
@@ -61,20 +69,24 @@ internal static class DashboardSnapshot
             .Select(day => day.MaxBy(sample => sample.SampledAt)!)
             .OrderBy(sample => sample.SampledAt).TakeLast(120).ToArray();
 
-    internal static Capacity[] CapacityHistory(DeskState.Sample[] samples) =>
-        samples.SelectMany(sample => sample.Volumes.Select(volume => (sample.SampledAt, Volume: volume)))
-            .Where(point => point.Volume.Available.HasValue)
+    internal static Capacity[] CapacityHistory(DeskState.Sample[] samples, DateTimeOffset through) =>
+        samples.Where(sample => sample.SampledAt <= through
+                && sample.SampledAt.UtcDateTime.Date >= through.UtcDateTime.Date.AddDays(1 - HistoryDays))
+            .SelectMany(sample => sample.Volumes.Select(volume => (sample.SampledAt, Volume: volume)))
+            .Where(point => point.Volume is { Available: >= 0, Total: > 0, Problem: null }
+                && point.Volume.Available <= point.Volume.Total)
             .GroupBy(point => point.Volume.Mount)
             .OrderByDescending(series => series.Max(point => point.SampledAt)).ThenBy(series => series.Key, StringComparer.Ordinal)
             .Take(8)
             .Select(series =>
             {
-                var latest = series.Last().Volume;
-                return new Capacity(series.Key, series.Where(point => point.Volume.Device == latest.Device
-                        && point.Volume.FileSystem == latest.FileSystem && point.Volume.Total == latest.Total)
-                    .TakeLast(30)
-                    .Select(point => new VolumeDay(DateOnly.FromDateTime(point.SampledAt.UtcDateTime), point.Volume.Available!.Value))
-                    .ToArray());
+                var points = series.OrderBy(point => point.SampledAt).ToArray();
+                var latest = points[^1].Volume;
+                var baseline = Array.FindLastIndex(points, point => point.Volume.Device != latest.Device
+                    || point.Volume.FileSystem != latest.FileSystem || point.Volume.Total != latest.Total);
+                return new Capacity(series.Key, points.Skip(baseline + 1)
+                    .Select(point => new VolumeDay(DateOnly.FromDateTime(point.SampledAt.UtcDateTime),
+                        point.Volume.Available!.Value, point.SampledAt)).ToArray(), latest.Total, baseline >= 0);
             }).ToArray();
 
     internal static bool SaveCharts(IApplicationPaths paths, Charts charts, CancellationToken ct) =>
@@ -95,10 +107,10 @@ public sealed class UpdateVisualDashboard(IActivityManager activityManager, IApp
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        var (now, history, coverage) = await DeskProbes.RunAsync(RefreshGate, Budget, async ct =>
+        await DeskProbes.RunAsync(RefreshGate, Budget, async ct =>
         {
             var now = DateTimeOffset.UtcNow;
-            var since = now.UtcDateTime.Date.AddDays(-89);
+            var since = now.UtcDateTime.Date.AddDays(1 - DashboardSnapshot.HistoryDays);
             var result = await activityManager.GetPagedResultAsync(new ActivityLogQuery
             {
                 HasUserId = true,
@@ -106,28 +118,34 @@ public sealed class UpdateVisualDashboard(IActivityManager activityManager, IApp
                 Limit = ActivityLimit
             });
             ct.ThrowIfCancellationRequested();
-            var entries = result.Items;
-            var history = entries.GroupBy(entry => DateOnly.FromDateTime(entry.Date.ToUniversalTime()))
+            var entries = result.Items.Where(entry => entry.Date.ToUniversalTime() <= now.UtcDateTime).ToArray();
+            var activity = entries.Where(entry => IsPlaybackStart(entry.Type) || entry.Type == "AuthenticationSucceeded").ToArray();
+            var history = activity.GroupBy(entry => DateOnly.FromDateTime(entry.Date.ToUniversalTime()))
                 .Select(day => new DashboardSnapshot.ActivityDay(day.Key,
-                    day.Count(entry => entry.Type is "VideoPlayback" or "AudioPlayback" or "GamePlayback"),
+                    day.Count(entry => IsPlaybackStart(entry.Type)),
                     day.Count(entry => entry.Type == "AuthenticationSucceeded")))
                 .OrderBy(day => day.Date).ToArray();
-            DateTimeOffset? coverage = entries.Count > 0 && (entries.Count >= ActivityLimit || result.TotalRecordCount > entries.Count)
-                ? entries.Min(entry => entry.Date.ToUniversalTime()) : null;
-            return (now, history, coverage);
+            var hours = activity.GroupBy(entry => DashboardSnapshot.HourIndex(entry.Date.ToUniversalTime(), now))
+                .Where(hour => hour.Key >= 0)
+                .Select(hour => new DashboardSnapshot.ActivityHour(hour.Key,
+                    hour.Count(entry => IsPlaybackStart(entry.Type)),
+                    hour.Count(entry => entry.Type == "AuthenticationSucceeded")))
+                .OrderBy(hour => hour.Hour).ToArray();
+            DateTimeOffset? oldest = entries.Length == 0 ? null : entries.Min(entry => entry.Date.ToUniversalTime());
+            var capped = result.Items.Count >= ActivityLimit || result.TotalRecordCount > result.Items.Count;
+            return await DeskProbes.Run(DeskProbes.StateGate, Budget, token =>
+            {
+                var previous = DashboardSnapshot.ReadCharts(paths, token);
+                if (previous is not null && previous.SampledAt >= now) return true;
+                var checks = DashboardSnapshot.ReadChecks(paths, token);
+                var storageHistory = DashboardSnapshot.MergeStorageHistory(checks, DeskState.ReadDiagnostics(paths, token));
+                var charts = new DashboardSnapshot.Charts(now, capped ? oldest ?? now : null, history, checks.Media,
+                    DashboardSnapshot.CapacityHistory(storageHistory, now), hours, oldest);
+                return DashboardSnapshot.SaveCharts(paths, charts, token);
+            }, ct, waitForSlot: true);
         }, cancellationToken);
-        var (checks, storageHistory) = await DeskProbes.Run(DeskProbes.StateGate, Budget, ct =>
-        {
-            var snapshot = DashboardSnapshot.ReadChecks(paths, ct);
-            return (snapshot, DashboardSnapshot.MergeStorageHistory(snapshot, DeskState.ReadDiagnostics(paths, ct)));
-        }, cancellationToken, waitForSlot: true);
-        var charts = new DashboardSnapshot.Charts(now, coverage, history, checks.Media,
-            DashboardSnapshot.CapacityHistory(storageHistory));
-        await DeskProbes.Run(DeskProbes.StateGate, Budget, ct =>
-        {
-            var previous = DashboardSnapshot.ReadCharts(paths, ct);
-            return previous is not null && previous.SampledAt >= now || DashboardSnapshot.SaveCharts(paths, charts, ct);
-        }, cancellationToken, waitForSlot: true);
         progress.Report(100);
     }
+
+    private static bool IsPlaybackStart(string? type) => type is "VideoPlayback" or "AudioPlayback" or "GamePlayback";
 }
