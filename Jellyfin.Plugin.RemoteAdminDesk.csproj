@@ -4,8 +4,8 @@
     <JellyfinVersion>12.4.0</JellyfinVersion>
     <PluginDisplayName>VMS Admin Ext. Dash.</PluginDisplayName>
     <PluginIdentityName>VMS Expanded Admin Dashboard</PluginIdentityName>
-    <AssemblyVersion>0.6.1.0</AssemblyVersion>
-    <Version>0.6.1.0</Version>
+    <AssemblyVersion>0.6.1.1</AssemblyVersion>
+    <Version>0.6.1.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
