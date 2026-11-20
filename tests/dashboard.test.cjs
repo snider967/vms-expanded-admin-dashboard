@@ -70,6 +70,42 @@ test("recent transcode rows show encoder evidence and only count matching error 
     assert.equal(remux.issue, "2 matching error lines");
 });
 
+test("the raw log tail button works with Jellyfin Web's element creation shim", async () => {
+    const createNode = () => ({
+        children: [],
+        append(...children) { this.children.push(...children); },
+        setAttribute() {},
+        addEventListener(_, handler) { this.click = handler; }
+    });
+    const requests = [];
+    const context = {
+        document: { createElement(tag, extension) {
+            if (extension) extension.toLowerCase();
+            return createNode();
+        } },
+        trendText: createNode,
+        signal: new AbortController().signal,
+        read: async (route, params) => {
+            requests.push([route, params.name]);
+            return { content: "first\rsecond\r\nthird", truncated: true };
+        },
+        problem: error => { throw error; }
+    };
+    const rawTailSource = script.slice(script.indexOf("        function rawPlaybackTail"), script.indexOf("        const arrProblems"));
+    const rawPlaybackTail = vm.runInNewContext(rawTailSource + "\nrawPlaybackTail", context);
+    const [button, feedback, raw] = rawPlaybackTail("FFmpeg.Transcode-test.log").children;
+    assert.equal(raw.hidden, true);
+    assert.equal(requests.length, 0);
+    await button.click();
+    assert.deepEqual(requests, [["RemoteAdminDesk/LogTail", "FFmpeg.Transcode-test.log"]]);
+    assert.equal(raw.textContent, "first\nsecond\nthird");
+    assert.equal(raw.hidden, false);
+    assert.match(feedback.textContent, /96 KiB/);
+    await button.click();
+    assert.equal(raw.hidden, true);
+    assert.equal(raw.textContent, "");
+});
+
 test("event charts distinguish capped dates, partially covered weeks, and observed zeroes", () => {
     const rows = [{ date: "2026-11-03", starts: 4 }, { date: "2026-11-04", starts: 3, signIns: 2 }];
     const daily = desk.trendRange(7, timestamp(6));
