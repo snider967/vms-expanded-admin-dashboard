@@ -42,6 +42,7 @@ jobs:
           dotnet-version: ${{ steps.project.outputs.sdk }}
       - name: Test plugin
         run: |
+          dotnet run --project tests/Trends.csproj -c Release
           node --test tests/dashboard.test.cjs
           python3 -m unittest discover -s tests -v
       - name: Publish versioned ZIP and Jellyfin catalog

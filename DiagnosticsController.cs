@@ -57,10 +57,11 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
         return RunProbe(DeskProbes.StateGate, ct =>
         {
             var checks = DashboardSnapshot.ReadChecks(paths, ct);
+            var charts = DashboardSnapshot.ReadCharts(paths, ct);
             return new {
-                checks.Storage, checks.Branches, checks.Media,
+                checks.Storage, checks.Branches, Media = charts?.Media ?? checks.Media,
                 StorageHistory = DashboardSnapshot.MergeStorageHistory(checks, DeskState.ReadDiagnostics(paths, ct)),
-                Charts = DashboardSnapshot.ReadCharts(paths, ct)
+                Charts = charts
             };
         }, cancellationToken);
     }

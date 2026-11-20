@@ -187,12 +187,9 @@ public sealed class ScheduledMediaAlerts(
                 cancellationToken, waitForSlot: true);
             var webhook = DeskSettings.Effective(DeskDiscord.MediaVariable, settings.MediaWebhook);
             var sampledAt = DateTimeOffset.UtcNow;
-            var current = await DeskProbes.Run(QueryGate, Budget, ReadLatest, cancellationToken);
-            var media = Summarize(current, sampledAt);
             if (string.IsNullOrWhiteSpace(webhook))
             {
                 logger.LogInformation("VMS Expanded Admin Dashboard media alerts have no Discord webhook configured.");
-                await SaveDashboard(media, cancellationToken);
                 progress.Report(100);
                 return;
             }
@@ -227,7 +224,6 @@ public sealed class ScheduledMediaAlerts(
                 if (state.QueuedCount == 0)
                     await Save(state with { Digest = null }, cancellationToken);
             }
-            await SaveDashboard(media, cancellationToken);
             progress.Report(100);
         }
         finally
@@ -242,7 +238,7 @@ public sealed class ScheduledMediaAlerts(
         var through = state.ScanThrough!.Value;
         var boundary = state.CursorIds ?? [];
         var page = await DeskProbes.Run(QueryGate, Budget, token =>
-            ReadItems(token, QueryLimit, cutoff, boundary), ct);
+            ReadItems(token, cutoff, boundary), ct);
         var items = page.Where(item => item.Date <= through).ToArray();
         var complete = page.Length < QueryLimit || items.Length < page.Length;
 
@@ -363,31 +359,7 @@ public sealed class ScheduledMediaAlerts(
         DeskProbes.Run(DeskProbes.StateGate, Budget, token => DeskState.SaveMedia(paths, state, token),
             ct, waitForSlot: true);
 
-    private Task<bool> SaveDashboard(DashboardSnapshot.MediaHistory media, CancellationToken ct) =>
-        DeskProbes.Run(DeskProbes.StateGate, Budget, token => DashboardSnapshot.UpdateChecks(paths, token, media: media),
-            ct, waitForSlot: true);
-
-    private static DashboardSnapshot.MediaHistory Summarize(MediaItem[] items, DateTimeOffset sampledAt)
-    {
-        var earliestDay = sampledAt.UtcDateTime.Date.AddDays(1 - DashboardSnapshot.HistoryDays);
-        var recorded = items.Where(item => item.Date <= sampledAt).ToArray();
-        var days = recorded.Where(item => item.Date.UtcDateTime.Date >= earliestDay)
-            .GroupBy(item => DateOnly.FromDateTime(item.Date.UtcDateTime))
-            .OrderBy(day => day.Key)
-            .Select(day => new DashboardSnapshot.MediaDay(day.Key, day.Count(item => !item.IsEpisode), day.Count(item => item.IsEpisode)))
-            .ToArray();
-        var hours = recorded.GroupBy(item => DashboardSnapshot.HourIndex(item.Date, sampledAt))
-            .Where(hour => hour.Key >= 0)
-            .OrderBy(hour => hour.Key)
-            .Select(hour => new DashboardSnapshot.MediaHour(hour.Key, hour.Count(item => !item.IsEpisode), hour.Count(item => item.IsEpisode)))
-            .ToArray();
-        return new DashboardSnapshot.MediaHistory(sampledAt, items.Length == QueryLimit
-            ? recorded.LastOrDefault()?.Date ?? sampledAt : null, days, hours);
-    }
-
-    private MediaItem[] ReadLatest(CancellationToken ct) => ReadItems(ct, QueryLimit);
-
-    private MediaItem[] ReadItems(CancellationToken ct, int limit, DateTimeOffset? cutoff = null, Guid[]? excluded = null)
+    private MediaItem[] ReadItems(CancellationToken ct, DateTimeOffset cutoff, Guid[] excluded)
     {
         var items = library.GetItemList(new InternalItemsQuery
         {
@@ -395,16 +367,16 @@ public sealed class ScheduledMediaAlerts(
             IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Episode],
             IsVirtualItem = false,
             EnableTotalRecordCount = false,
-            Limit = limit,
-            MinDateCreated = cutoff?.UtcDateTime,
-            ExcludeItemIds = excluded ?? [],
-            OrderBy = [(ItemSortBy.DateCreated, cutoff is null ? SortOrder.Descending : SortOrder.Ascending)]
+            Limit = QueryLimit,
+            MinDateCreated = cutoff.UtcDateTime,
+            ExcludeItemIds = excluded,
+            OrderBy = [(ItemSortBy.DateCreated, SortOrder.Ascending)]
         });
         ct.ThrowIfCancellationRequested();
         return items.Select(item =>
         {
             var title = item is Episode episode ? $"{episode.SeriesName} · {episode.Name}" : item.Name;
-            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()), item is Episode, CleanTitle(title));
+            return new MediaItem(item.Id, new DateTimeOffset(item.DateCreated.ToUniversalTime()), CleanTitle(title));
         }).ToArray();
     }
 
@@ -416,7 +388,7 @@ public sealed class ScheduledMediaAlerts(
         return clean[..(char.IsHighSurrogate(clean[96]) ? 96 : 97)] + "…";
     }
 
-    private sealed record MediaItem(Guid Id, DateTimeOffset Date, bool IsEpisode, string Title);
+    private sealed record MediaItem(Guid Id, DateTimeOffset Date, string Title);
 }
 
 internal static partial class DeskDiscord

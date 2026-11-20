@@ -4,8 +4,8 @@
     <JellyfinVersion>12.4.0</JellyfinVersion>
     <PluginDisplayName>VMS Admin Ext. Dash.</PluginDisplayName>
     <PluginIdentityName>VMS Expanded Admin Dashboard</PluginIdentityName>
-    <AssemblyVersion>0.6.1.1</AssemblyVersion>
-    <Version>0.6.1.1</Version>
+    <AssemblyVersion>0.6.2.0</AssemblyVersion>
+    <Version>0.6.2.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -16,6 +16,7 @@
     <AssemblyMetadata Include="PluginDisplayName" Value="$(PluginDisplayName)" />
     <AssemblyMetadata Include="PluginIdentityName" Value="$(PluginIdentityName)" />
     <AssemblyMetadata Include="JellyfinVersion" Value="$(JellyfinVersion)" />
+    <Compile Remove="tests/**/*.cs" />
     <EmbeddedResource Include="Pages/desk.html" LogicalName="Jellyfin.Plugin.RemoteAdminDesk.Pages.desk.html" />
   </ItemGroup>
 </Project>
