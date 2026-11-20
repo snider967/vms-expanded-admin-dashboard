@@ -8,12 +8,13 @@ internal static class DeskState
 {
     private const int MaxBytes = 1024 * 1024;
     private const string DiagnosticFile = "diagnostic-samples.json";
+    private const string HealthDigestFile = "health-digest.json";
     private const string MediaFile = "media-baseline.json";
     private static readonly JsonSerializerOptions WireFormat = new(JsonSerializerDefaults.Web);
     internal sealed record Sample(DateTimeOffset SampledAt, Volume[] Volumes);
     internal sealed record Delivery(DateTimeOffset AttemptedAt, DateTimeOffset? DeliveredAt, string Status);
     internal sealed record Diagnostics(Sample[] Samples, string[] Delivered, bool? StorageWarning, DateTimeOffset? LastScanAt,
-        Delivery? Discord = null, bool? MountWarning = null);
+        Delivery? Discord = null, bool? MountWarning = null, HealthAlerts.State? Health = null);
     internal const int MediaQueueLimit = 240;
     internal const int MediaBoundaryLimit = 12000;
     internal sealed record MediaAlert(Guid Id, string Title);
@@ -27,20 +28,28 @@ internal static class DeskState
         public int QueuedCount => Digest is { } digest ? digest.Total - digest.Sent : LegacyQueuedCount;
         internal int LegacyQueuedCount => Pending.Length + (Outbox?.Length ?? 0);
     }
+    internal sealed record HealthDigestDelivery(DateOnly? SentOn, Delivery Delivery);
+    internal static HealthDigestDelivery? ReadHealthDigest(IApplicationPaths paths, CancellationToken ct) =>
+        Read<HealthDigestDelivery>(paths, HealthDigestFile, ct);
+    internal static bool SaveHealthDigest(IApplicationPaths paths, HealthDigestDelivery delivery, CancellationToken ct) =>
+        Save(paths, HealthDigestFile, delivery, ct);
+
     internal sealed record NotificationChannel(string Configuration, DateTimeOffset? LastScanAt, Delivery? Delivery);
-    internal sealed record NotificationStatus(NotificationChannel Diagnostics, NotificationChannel Media, int PendingMedia, bool MediaBaseline);
+    internal sealed record NotificationStatus(NotificationChannel Diagnostics, NotificationChannel Media, int PendingMedia, bool MediaBaseline,
+        NotificationChannel DailyDigest);
 
     internal static NotificationStatus ReadNotifications(IApplicationPaths paths, CancellationToken ct)
     {
         var diagnostics = ReadDiagnostics(paths, ct);
         var media = ReadMedia(paths, ct);
         var settings = DeskSettings.Read(paths.DataPath, ct);
+        var diagnosticsConfig = DeskDiscord.Configuration(DeskSettings.Effective(DeskDiscord.DiagnosticsVariable, settings.DiagnosticsWebhook));
+        var digest = ReadHealthDigest(paths, ct);
         return new NotificationStatus(
-            new NotificationChannel(DeskDiscord.Configuration(DeskSettings.Effective(DeskDiscord.DiagnosticsVariable,
-                settings.DiagnosticsWebhook)), diagnostics.LastScanAt, diagnostics.Discord),
+            new NotificationChannel(diagnosticsConfig, diagnostics.LastScanAt, diagnostics.Discord),
             new NotificationChannel(DeskDiscord.Configuration(DeskSettings.Effective(DeskDiscord.MediaVariable,
                 settings.MediaWebhook)), media?.LastScanAt, media?.Discord),
-            media?.QueuedCount ?? 0, media is not null);
+            media?.QueuedCount ?? 0, media is not null, new NotificationChannel(diagnosticsConfig, null, digest?.Delivery));
     }
 
     internal static Delivery RecordDelivery(Delivery? previous, string status)

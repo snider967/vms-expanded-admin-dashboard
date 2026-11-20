@@ -115,6 +115,10 @@ try
         emptySnapshot.RootElement.GetProperty("media").GetProperty("days").GetArrayLength() == 0,
         "A successfully collected empty window should have no events.");
     Console.WriteLine("Scheduled Trends collection, UTC ranges, repeat refresh and persisted state passed.");
+    HealthIncidentTests.Run(paths, statePath);
+    await HealthDeliveryTests.Run(paths, CreateStub<MediaBrowser.Model.Tasks.ITaskManager>((method, _) =>
+        method.Name == "get_ScheduledTasks" ? Array.Empty<MediaBrowser.Model.Tasks.IScheduledTaskWorker>()
+            : throw new NotSupportedException(method.Name)));
 }
 finally
 {
