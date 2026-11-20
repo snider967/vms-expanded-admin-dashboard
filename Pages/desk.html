@@ -601,14 +601,38 @@ const DeskAnalysis = (() => {
 
     function livePlayback(sessions) {
         return sessions.filter(session => session.NowPlayingItem).map(session => {
+            const item = session.NowPlayingItem;
             const engine = session.TranscodingInfo;
-            const reported = session.PlayState?.PlayMethod;
-            let method;
-            if (engine?.IsVideoDirect && engine.IsAudioDirect === false) method = "Direct stream";
-            else if (engine?.VideoCodec && engine.IsVideoDirect === false) method = "Transcode";
-            else if (engine?.IsAudioDirect && (engine.IsVideoDirect || !engine.VideoCodec)) method = "Remux";
-            else method = { DirectPlay: "Direct play", DirectStream: "Direct stream", Transcode: "Transcode" }[reported] || "Unknown";
-            return { session, method, paused: !!session.PlayState?.IsPaused };
+            const state = session.PlayState;
+            const source = item.MediaSources?.find(media => state?.MediaSourceId && media.Id === state.MediaSourceId)
+                || (item.MediaSources?.length === 1 && !state?.MediaSourceId ? item.MediaSources[0] : null);
+            const streams = source?.MediaStreams || (item.MediaSources?.length > 1 ? [] : item.MediaStreams) || [];
+            const video = streams.find(stream => stream.Type === "Video");
+            const audio = streams.find(stream => stream.Type === "Audio" && stream.Index === state?.AudioStreamIndex)
+                || (state?.AudioStreamIndex == null ? streams.find(stream => stream.Type === "Audio") : null);
+            const videoConverted = engine?.IsVideoDirect === false && !!engine.VideoCodec && item.MediaType !== "Audio";
+            const audioConverted = engine?.IsAudioDirect === false && !!engine.AudioCodec;
+            const videoCopied = engine?.IsVideoDirect === true || item.MediaType === "Audio";
+            const audioCopied = engine?.IsAudioDirect === true;
+            const reported = state?.PlayMethod;
+            let method = { DirectPlay: "Direct play", DirectStream: "Direct stream", Transcode: "Transcode" }[reported] || "Unknown";
+            if (videoConverted) method = "Video transcode";
+            else if (videoCopied && audioConverted) method = "Audio transcode";
+            else if (engine && videoCopied && audioCopied) method = "Remux";
+            else if (audioConverted) method = "Transcode";
+            const isTranscoding = method === "Video transcode" || method === "Audio transcode" || method === "Transcode";
+            const api = typeof engine?.HardwareAccelerationType === "string" ? engine.HardwareAccelerationType.toLowerCase() : null;
+            const hardware = { qsv: "Intel Quick Sync", vaapi: "VA-API", nvenc: "NVIDIA NVENC", amf: "AMD AMF",
+                videotoolbox: "VideoToolbox", v4l2m2m: "V4L2 M2M", rkmpp: "Rockchip MPP" };
+            let acceleration;
+            if (videoConverted) acceleration = Object.hasOwn(hardware, api) ? hardware[api] + " reported"
+                : api === "none" ? "Software reported" : "Video acceleration unknown";
+            return { session, method, isTranscoding, acceleration, paused: state?.IsPaused,
+                videoCodec: engine?.VideoCodec || (method === "Direct play" || videoCopied ? video?.Codec : null),
+                audioCodec: engine?.AudioCodec || (method === "Direct play" || audioCopied ? audio?.Codec : null),
+                outputBitrate: engine?.Bitrate > 0 ? engine.Bitrate : null,
+                sourceBitrate: source?.Bitrate > 0 ? source.Bitrate : null,
+                reasons: Array.isArray(engine?.TranscodeReasons) ? engine.TranscodeReasons : [] };
         });
     }
 
@@ -662,8 +686,14 @@ const DeskAnalysis = (() => {
         return { buckets, observations: observedUnits.size, projection, latestAt: latest?.timestamp };
     }
 
+    function largestVolumesFirst(capacity, volumes = []) {
+        const totals = new Map(volumes.map(volume => [volume.mount, volume.total]));
+        const total = volume => volume.totalBytes ?? totals.get(volume.mount) ?? 0;
+        return [...capacity].sort((left, right) => total(right) - total(left));
+    }
+
     return { analyze, recordStorage, forecast, playbackSummary, additions, arrivalRates, codecCounts, recentDayCounts,
-        activityBuckets, matchesVersion, livePlayback, trendRange, trendBuckets, capacityTrend };
+        activityBuckets, matchesVersion, livePlayback, trendRange, trendBuckets, capacityTrend, largestVolumesFirst };
 })();
 
         const page = document.getElementById("remoteAdminDesk");
@@ -905,31 +935,33 @@ const DeskAnalysis = (() => {
             if (!overviewVisible() || playbackRequest === navigation) return;
             playbackRequest = navigation;
             try {
-                await section("playback", async () => {
-                    const active = DeskAnalysis.livePlayback(await read("Sessions"));
-                    const sampledAt = new Date().toISOString();
-                    const transcodes = active.filter(stream => stream.method === "Transcode").length;
-                    const paused = active.filter(stream => stream.paused).length;
-                    status("active-total", active.length);
-                    status("transcode-total", transcodes);
-                    status("playback", (active.length ? paused + " paused" : "No active playback") + " · " + formatDate(sampledAt));
-                    const methods = new Map();
-                    for (const stream of active) methods.set(stream.method, (methods.get(stream.method) || 0) + 1);
-                    field("stream-chart").replaceChildren(...(methods.size ? [donut("Live playback methods",
-                        [...methods].map(([label, value]) => ({ label, value })))] : []));
-                    setList("sessions", active.slice(0, 24).map(({ session, method, paused }) => {
-                        const media = session.NowPlayingItem;
-                        const engine = session.TranscodingInfo;
-                        return row([media.SeriesName, media.Name].filter(Boolean).join(" · "), [session.UserName,
-                            session.Client, method, paused ? "Paused" : null, engine?.VideoCodec, engine?.HardwareAccelerationType,
-                            Number.isFinite(engine?.Framerate) ? engine.Framerate.toFixed(1) + " fps" : null,
-                            Number.isFinite(engine?.Bitrate) ? Math.round(engine.Bitrate / 1000) + " kbps" : null,
-                            engine?.TranscodeReasons?.join(", ")].filter(Boolean).join(" · "));
-                    }));
-                    report.playback = { active: active.length, paused, transcodes, sampledAt };
-                });
-            } catch {
-                // Navigation cancelled the request.
+                const active = DeskAnalysis.livePlayback(await read("Sessions"));
+                const sampledAt = new Date().toISOString();
+                const transcodes = active.filter(stream => stream.isTranscoding).length;
+                const paused = active.filter(stream => stream.paused).length;
+                status("active-total", active.length);
+                status("transcode-total", transcodes);
+                status("playback", (active.length ? paused + " paused" : "No active playback") + " · "
+                    + formatDate(sampledAt) + (active.length > 24 ? " · Showing 24 of " + active.length : ""));
+                const methods = new Map();
+                for (const stream of active) methods.set(stream.method, (methods.get(stream.method) || 0) + 1);
+                field("stream-chart").replaceChildren(...(methods.size ? [donut("Live playback methods",
+                    [...methods].map(([label, value]) => ({ label, value })))] : []));
+                setList("sessions", active.slice(0, 24).map(stream => {
+                    const { session, method, paused, videoCodec, audioCodec, acceleration, outputBitrate, sourceBitrate, reasons } = stream;
+                    const media = session.NowPlayingItem;
+                    const bitrate = outputBitrate || sourceBitrate;
+                    return row([media.SeriesName, media.Name].filter(Boolean).join(" · ") || "Unknown title", [session.UserName,
+                        session.Client, method, paused === true ? "Paused" : paused === false ? "Playing" : null,
+                        videoCodec && "Video " + videoCodec, audioCodec && "Audio " + audioCodec, acceleration,
+                        bitrate && Math.round(bitrate / 1000) + (outputBitrate ? " kbps output" : " kbps source"),
+                        reasons.length ? "Reasons: " + reasons.join(", ") : null].filter(Boolean).join(" · "));
+                }));
+                report.playback = { active: active.length, paused, transcodes, sampledAt };
+            } catch (error) {
+                if (!navigation.aborted)
+                    status("playback", "Live playback unavailable · " + problem(error)
+                        + (report.playback ? " · Last successful sample " + formatDate(report.playback.sampledAt) : ""));
             } finally {
                 if (playbackRequest === navigation) playbackRequest = null;
             }
@@ -1053,7 +1085,8 @@ const DeskAnalysis = (() => {
             } else status("visual-media", "Run the new movies and TV task to collect the first sample.");
             const expanded = new Set(Array.from(field("visual-capacity").querySelectorAll("details[open]"), node => node.dataset.mount));
             const firstRender = !field("visual-capacity").querySelector("details");
-            field("visual-capacity").replaceChildren(...(charts.capacity.length ? charts.capacity.map((volume, index) => {
+            const volumes = DeskAnalysis.largestVolumesFirst(charts.capacity, storage?.volumes);
+            field("visual-capacity").replaceChildren(...(volumes.length ? volumes.map((volume, index) => {
                 const details = document.createElement("details");
                 details.className = "rad-volume";
                 details.dataset.mount = volume.mount;
@@ -1415,14 +1448,17 @@ const DeskAnalysis = (() => {
         function renderTriage(saved, logs = saved.result.logs) {
             const result = saved.result;
             status("triage-status", (logs.length
-                ? "Recent FFmpeg logs sorted by time."
+                ? "Recent FFmpeg logs sorted by time. Encoder evidence is scoped to each log."
                 : "No recent FFmpeg transcode logs were found.") + " Checked " + formatDate(saved.sampledAt) + ".");
             setList("triage-logs", logs.map(log => {
-                if (!log.signals) return row(formatDate(log.modifiedAt) + " · " + log.name, log.count + " matching lines");
+                const encoders = log.encoders?.map(evidence => evidence.encoder + " · " + evidence.acceleration);
+                const acceleration = encoders?.length ? encoders.join(", ") : "Video encoder unknown";
+                if (!log.signals) return row(formatDate(log.modifiedAt) + " · " + log.name,
+                    acceleration + " · " + log.count + " matching lines");
                 const details = document.createElement("details");
                 const title = document.createElement("summary");
                 title.textContent = formatDate(log.modifiedAt) + " · " + log.name
-                    + (log.truncated ? " · tail excerpt" : "");
+                    + " · " + acceleration + (log.truncated ? " · tail excerpt" : "");
                 const evidence = document.createElement("pre");
                 evidence.textContent = log.signals.join("\n") || "No common encoding or playback signal in this excerpt.";
                 details.append(title, evidence);
