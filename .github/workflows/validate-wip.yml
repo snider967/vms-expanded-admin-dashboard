@@ -1,0 +1,71 @@
+name: Validate unreleased work
+
+# Test-only. Builds and tests work branches from an empty NuGet cache.
+# Never publishes: read-only token, no release steps, no artifact upload.
+on:
+  push:
+    branches:
+      - 'wip/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Use a fresh package folder
+        run: echo "NUGET_PACKAGES=$RUNNER_TEMP/nuget-empty" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - name: Read target SDK
+        id: project
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from xml.etree import ElementTree
+          properties = ElementTree.parse("Jellyfin.Plugin.RemoteAdminDesk.csproj").getroot().find("PropertyGroup")
+          print("sdk=" + properties.findtext("TargetFramework").removeprefix("net") + ".x")
+          print("tag=v" + properties.findtext("AssemblyVersion"))
+          PY
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ steps.project.outputs.sdk }}
+      - name: Confirm empty package cache
+        run: |
+          mkdir -p "$NUGET_PACKAGES"
+          test -z "$(ls -A "$NUGET_PACKAGES")"
+          dotnet --info | sed -n '1,12p'
+          dotnet nuget locals all --list
+      - name: Restore from nuget.org only
+        run: |
+          cat > "$RUNNER_TEMP/NuGet.Config" <<'XML'
+          <configuration>
+            <packageSources><clear/><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources>
+          </configuration>
+          XML
+          dotnet restore Jellyfin.Plugin.RemoteAdminDesk.csproj --configfile "$RUNNER_TEMP/NuGet.Config" --no-cache
+          dotnet restore tests/Trends.csproj --configfile "$RUNNER_TEMP/NuGet.Config" --no-cache
+          find "$NUGET_PACKAGES" -mindepth 2 -maxdepth 2 -type d | sed "s|$NUGET_PACKAGES/||" | sort
+      - name: Release build
+        run: dotnet build Jellyfin.Plugin.RemoteAdminDesk.csproj -c Release --no-restore
+      - name: .NET regression and adapter fixtures
+        run: dotnet run --project tests/Trends.csproj -c Release --no-restore
+      - name: Dashboard tests
+        run: node --test tests/dashboard.test.cjs
+      - name: Monitor tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Package check (not uploaded)
+        env:
+          PROJECT_TAG: ${{ steps.project.outputs.tag }}
+        run: |
+          python3 Scripts/build-release.py --out "$RUNNER_TEMP/package" --validate-tag "$PROJECT_TAG"
+          cd "$RUNNER_TEMP/package"
+          sha256sum -c ./*.sha256
+          python3 -c 'import zipfile,glob,json; z=zipfile.ZipFile(glob.glob("*.zip")[0]); print(sorted(z.namelist())); print(json.loads(z.read("meta.json")))'
