@@ -287,11 +287,15 @@ test("recent-media charts use date buckets and count distinct codecs per item", 
 
 test("all dashboard tab buttons point to distinct labelled panels", () => {
     const tabs = [...html.matchAll(/id="(rad-tab-[a-z]+)" role="tab" aria-controls="(rad-panel-[a-z]+)"/g)];
-    assert.equal(tabs.length, 6);
+    assert.equal(tabs.length, 7);
     assert.equal(new Set(tabs.map(tab => tab[2])).size, tabs.length);
     for (const [, button, panel] of tabs) {
         assert(html.includes(`id="${panel}" role="tabpanel" aria-labelledby="${button}"`));
     }
+    assert.match(html, /id="rad-tab-pipeline"[^>]* hidden>/);
+    assert.match(html, /id="rad-panel-pipeline"[^>]* hidden>/);
+    assert.match(script, /tabs.filter\(candidate => !candidate.hidden\)/);
+    assert.match(script, /pipelineTab.hidden = access.mediaManagementEnabled !== true/);
 });
 
 
@@ -321,4 +325,66 @@ test("historical activity distinguishes successful logins, connections, and stre
     assert.equal(data.users[0].sessions, 1);
     const buckets = desk.activityBuckets(data.events, 7, now);
     assert.equal(buckets.reduce((n, bucket) => n + bucket.logins + bucket.sessions + bucket.starts, 0), 3);
+});
+
+test("Media Management UI uses the saved cache and clears secret inputs after loading or saving", async () => {
+    const calls = [];
+    const data = {
+        enabled: true,
+        integrations: [{ id: "sonarr", name: "Sonarr", enabled: true, authenticationModes: ["ApiKey"], authentication: "ApiKey",
+            baseUrl: "https://service.example/base/", credentialConfigured: true, pollSeconds: 300, timeoutSeconds: 10 }]
+    };
+    const fields = new Map();
+    const listeners = new Map();
+    const makeElement = () => ({
+        value: "", checked: false, hidden: true, children: [],
+        addEventListener(event, callback) { this[event] = callback; },
+        replaceChildren(...children) {
+            this.children = children;
+            if (children[0]?.value) this.value = children[0].value;
+        },
+        querySelectorAll() { return []; },
+        append(...children) { this.children.push(...children); },
+        dataset: {}
+    });
+    const field = name => {
+        if (!fields.has(name)) {
+            const element = makeElement();
+            element.addEventListener = (event, callback) => listeners.set(name + ":" + event, callback);
+            fields.set(name, element);
+        }
+        return fields.get(name);
+    };
+    const pipelineTab = { hidden: true };
+    const isolated = script.slice(script.indexOf('const pipelinePath ='), script.indexOf('async function activate()'));
+    const harness = {
+        field, pipelineTab, pipelineConfig: null, pipelineBusy: false, signal: { aborted: false },
+        status: (key, value) => { field(key).textContent = value; },
+        document: { createElement: makeElement, createDocumentFragment: makeElement },
+        report: { playback: { active: 1, transcodes: 0, sampledAt: timestamp(1) } },
+        formatDate: () => "sampled", problem: error => error.message, console,
+        read: async (url, params, max, payload, method) => {
+            calls.push({ url, payload, method: method || (payload ? "PUT" : "GET") });
+            if (url.endsWith("/Status"))
+                return { enabled: true, settingsAvailable: true, persistenceAvailable: true, services: [] };
+            return data;
+        }
+    };
+    vm.runInNewContext(isolated, harness);
+    await listeners.get("pipeline-config-load:click")();
+    assert.equal(pipelineTab.hidden, false);
+    assert.equal(field("pipeline-secret").value, "");
+    assert.equal(field("pipeline-username").value, "");
+    await listeners.get("pipeline-reload:click")();
+    assert.equal(calls.at(-1).method, "GET");
+    assert.match(calls.at(-1).url, /\/Status$/);
+    assert.match(field("pipeline-jellyfin").textContent, /1 active streams/);
+    assert.equal(calls.filter(call => call.method === "POST").length, 0);
+
+    field("pipeline-secret").value = "synthetic-replacement";
+    listeners.get("pipeline-service-form:submit")({ preventDefault() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.at(-1).payload.credential, "synthetic-replacement");
+    assert.equal(field("pipeline-secret").value, "");
+    assert.match(field("pipeline-config-status").textContent, /saved/);
 });

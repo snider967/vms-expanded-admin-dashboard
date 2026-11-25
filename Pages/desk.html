@@ -172,6 +172,7 @@
                 <button type="button" class="rad-tab" id="rad-tab-logs" role="tab" aria-controls="rad-panel-logs" aria-selected="false" tabindex="-1" data-rad-tab="logs">Logs</button>
                 <button type="button" class="rad-tab" id="rad-tab-imports" role="tab" aria-controls="rad-panel-imports" aria-selected="false" tabindex="-1" data-rad-tab="imports">Imports</button>
                 <button type="button" class="rad-tab" id="rad-tab-notifications" role="tab" aria-controls="rad-panel-notifications" aria-selected="false" tabindex="-1" data-rad-tab="notifications">Notifications</button>
+                <button type="button" class="rad-tab" id="rad-tab-pipeline" role="tab" aria-controls="rad-panel-pipeline" aria-selected="false" tabindex="-1" data-rad-tab="pipeline" hidden>Media Management</button>
                 <button type="button" class="rad-tab" id="rad-tab-settings" role="tab" aria-controls="rad-panel-settings" aria-selected="false" tabindex="-1" data-rad-tab="settings">Settings</button>
             </div>
             <div id="rad-panel-overview" role="tabpanel" aria-labelledby="rad-tab-overview" tabindex="0" data-rad-panel="overview">
@@ -292,6 +293,20 @@
                     <ul class="rad-data" data-desk="incident-list"></ul>
                 </section>
             </div>
+            <div id="rad-panel-pipeline" role="tabpanel" aria-labelledby="rad-tab-pipeline" tabindex="0" data-rad-panel="pipeline" hidden>
+                <section class="rad-card">
+                    <div class="rad-top">
+                        <h2>Media pipeline</h2>
+                        <div class="rad-controls">
+                            <button type="button" data-desk="pipeline-reload">Reload saved observations</button>
+                            <button type="button" data-desk="pipeline-settings">Integration settings</button>
+                        </div>
+                    </div>
+                    <p data-desk="pipeline-summary" role="status"></p>
+                    <p data-desk="pipeline-jellyfin" class="rad-muted"></p>
+                </section>
+                <div class="rad-grid rad-section-head" data-desk="pipeline-services"></div>
+            </div>
             <div id="rad-panel-settings" role="tabpanel" aria-labelledby="rad-tab-settings" tabindex="0" data-rad-panel="settings" hidden>
                 <section class="rad-card">
                     <div class="rad-top"><h2>Plugin settings</h2><button is="emby-button" type="button" class="raised" data-desk="read-settings">Load settings</button></div>
@@ -342,6 +357,50 @@
                         <summary>Outage alerts and schedules</summary>
                         <p>Configure outage alerts on the external monitor with <code>RAD_HEALTH_URL</code> and <code>RAD_UPTIME_DISCORD_WEBHOOK</code>. Choose when Jellyfin jobs run in Scheduled Tasks.</p>
                     </details>
+                </section>
+                <section class="rad-card rad-section-head">
+                    <h2>Media Management</h2>
+                    <p>Enable read-only monitoring for the services you use.</p>
+                    <button type="button" data-desk="pipeline-config-load">Load Media Management settings</button>
+                    <p role="status" data-desk="pipeline-config-status"></p>
+                    <div data-desk="pipeline-config" hidden>
+                        <form data-desk="pipeline-enable-form">
+                            <label><input type="checkbox" data-desk="pipeline-enabled"> Enable Media Management</label>
+                            <button type="submit">Save feature setting</button>
+                        </form>
+                        <form data-desk="pipeline-service-form">
+                            <div class="rad-field">
+                                <label for="rad-pipeline-service">Service</label>
+                                <select id="rad-pipeline-service" data-desk="pipeline-service"></select>
+                            </div>
+                            <label><input type="checkbox" data-desk="pipeline-service-enabled"> Enable polling for this service</label>
+                            <div class="rad-field">
+                                <label for="rad-pipeline-url">Service base URL</label>
+                                <input id="rad-pipeline-url" type="url" data-desk="pipeline-url" maxlength="512">
+                                <small>Include the reverse proxy prefix when configured. Remote public addresses require HTTPS.</small>
+                            </div>
+                            <div class="rad-field">
+                                <label for="rad-pipeline-auth">Authentication</label>
+                                <select id="rad-pipeline-auth" data-desk="pipeline-auth"></select>
+                            </div>
+                            <div class="rad-field" data-desk="pipeline-user-field" hidden>
+                                <label for="rad-pipeline-username">Username</label>
+                                <input id="rad-pipeline-username" type="text" data-desk="pipeline-username" maxlength="256" autocomplete="off">
+                            </div>
+                            <div class="rad-field">
+                                <label for="rad-pipeline-secret">API key or password</label>
+                                <input id="rad-pipeline-secret" type="password" data-desk="pipeline-secret" maxlength="2048" autocomplete="new-password">
+                                <small data-desk="pipeline-credential-status"></small>
+                                <label><input type="checkbox" data-desk="pipeline-remove"> Remove saved credentials</label>
+                            </div>
+                            <div class="rad-controls">
+                                <label>Poll interval (seconds) <input type="number" min="60" max="86400" data-desk="pipeline-interval" required></label>
+                                <label>Request timeout (seconds) <input type="number" min="1" max="30" data-desk="pipeline-timeout" required></label>
+                            </div>
+                            <button type="submit">Save service</button>
+                            <button type="button" data-desk="pipeline-test-saved">Test saved connection</button>
+                        </form>
+                    </div>
                 </section>
             </div>
         </div>
@@ -726,6 +785,8 @@ const DeskAnalysis = (() => {
             : "size unavailable";
         const tabs = [...page.querySelectorAll("[data-rad-tab]")];
         const tabPanels = [...page.querySelectorAll("[data-rad-panel]")];
+        let pipelineConfig, pipelineBusy = false;
+        const pipelineTab = tabs.find(tab => tab.dataset.radTab === "pipeline");
         let signal, pageRequest, busy, cacheKey, activeClient, storage, history,
             arrivals, arrivalLimit, report, knownUsers, charts, playbackRequest, playbackTimer, chartTimer;
         function selectTab(selected, focus = false) {
@@ -737,17 +798,20 @@ const DeskAnalysis = (() => {
             for (const panel of tabPanels) panel.hidden = panel.dataset.radPanel !== selected.dataset.radTab;
             if (focus) selected.focus();
             if (selected === tabs[0] && playbackTimer) void pollPlayback();
+            if (selected === pipelineTab) void runPipeline("pipeline-summary", loadPipeline);
         }
-        for (const [index, tab] of tabs.entries()) {
+        for (const tab of tabs) {
             tab.addEventListener("click", () => selectTab(tab));
             tab.addEventListener("keydown", event => {
+                const visible = tabs.filter(candidate => !candidate.hidden);
+                const index = visible.indexOf(tab);
                 const destination = {
-                    ArrowLeft: (index + tabs.length - 1) % tabs.length,
-                    ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1
+                    ArrowLeft: (index + visible.length - 1) % visible.length,
+                    ArrowRight: (index + 1) % visible.length, Home: 0, End: visible.length - 1
                 }[event.key];
                 if (destination === undefined) return;
                 event.preventDefault();
-                selectTab(tabs[destination], true);
+                selectTab(visible[destination], true);
             });
         }
         const actionButtons = ["refresh", "read-storage", "read-additions", "read-usage", "read-logs", "read-tail",
@@ -865,9 +929,9 @@ const DeskAnalysis = (() => {
             return figure;
         }
 
-        async function read(path, params, max = 1024 * 1024, bodyData, method = bodyData === undefined ? "GET" : "PUT") {
+        async function read(path, params, max = 1024 * 1024, bodyData, method = bodyData === undefined ? "GET" : "PUT", timeout = 7500) {
             const navigation = signal;
-            const requestSignal = AbortSignal.any([navigation, AbortSignal.timeout(7500)]);
+            const requestSignal = AbortSignal.any([navigation, AbortSignal.timeout(timeout)]);
             const client = activeClient;
             const token = client?.accessToken?.();
             if (!token) throw new Error("Authentication required.");
@@ -1752,6 +1816,226 @@ const DeskAnalysis = (() => {
             }));
         });
 
+        const pipelinePath = "RemoteAdminDesk/MediaManagement/";
+        const serviceNames = { sonarr: "Sonarr", radarr: "Radarr", bazarr: "Bazarr", prowlarr: "Prowlarr",
+            seerr: "Seerr", qbittorrent: "qBittorrent", gluetun: "Gluetun" };
+        const pipelineWords = { apparentlyCompatible: "Compatible response",
+            authorizationFailed: "Insufficient rights", authenticationFailed: "Credentials rejected",
+            timedOut: "Timed out", rateLimited: "Rate limited", suspectedIncompatibility: "Possible API change",
+            controlReportsVpnRunning: "VPN control reports running", exitIpReported: "Exit IP reported" };
+        const pipelineLabel = value => pipelineWords[value] || (typeof value === "string"
+            ? value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " ").replace(/^./, first => first.toUpperCase())
+            : "Unknown");
+        const pipelineDiagnostics = {
+            "authentication-failed": "Check the saved credentials.",
+            "authorization-failed": "Check that the credentials allow these read endpoints.",
+            "endpoint-unsupported": "Check the service URL prefix and supported API version.",
+            "invalid-response": "Check the service version or reverse proxy response.",
+            "response-limit": "The service response exceeded the monitoring size limit.",
+            "redirect-refused": "Enter the final service URL. Redirects are blocked.",
+            "destination-denied": "Use a supported service address.",
+            "network-unavailable": "Verify that Jellyfin can reach the configured service.",
+            "rate-limited": "Wait for the service's retry window before testing again."
+        };
+
+        function resetPipelineSecrets() {
+            field("pipeline-secret").value = "";
+            field("pipeline-username").value = "";
+            field("pipeline-remove").checked = false;
+        }
+
+        async function runPipeline(output, operation) {
+            if (!signal || pipelineBusy || signal.aborted) return;
+            const navigation = signal;
+            pipelineBusy = true;
+            try { await operation(); }
+            catch (error) {
+                if (!navigation.aborted) status(output, error.status === 409
+                    ? "Enable Media Management and polling for this service before testing."
+                    : error.status === 429 ? "A check is in progress or this service is waiting to retry." : problem(error));
+            } finally {
+                pipelineBusy = false;
+            }
+        }
+
+        function renderPipeline(view) {
+            const count = view.services.length;
+            status("pipeline-summary", !view.settingsAvailable ? "Media Management configuration could not be read."
+                : !view.enabled ? "Feature settings are being applied or Media Management is disabled."
+                : (count ? count + " monitored service" + (count === 1 ? "" : "s") + " · Saved observations"
+                    : "Enable a service in Integration settings to see its observations.")
+                    + (view.persistenceAvailable === false && count ? " · Snapshot persistence unavailable" : ""));
+            const playback = report?.playback;
+            status("pipeline-jellyfin", playback ? "Jellyfin · " + playback.active + " active streams · " + playback.transcodes
+                + " transcodes · " + formatDate(playback.sampledAt) : "Jellyfin playback snapshot unavailable.");
+            const output = field("pipeline-services");
+            const open = new Set([...output.querySelectorAll("details[open]")].map(item => item.dataset.service));
+            const content = document.createDocumentFragment();
+            for (const service of view.services) {
+                const latest = service.latest;
+                const card = document.createElement("details");
+                card.className = "rad-card";
+                card.dataset.service = service.id;
+                card.open = open.has(service.id);
+                const heading = document.createElement("summary");
+                heading.append(row(serviceNames[service.id] || service.id,
+                    [latest ? pipelineLabel(latest.connectivity) : pipelineLabel(service.state),
+                        latest ? pipelineLabel(latest.compatibility) : null, service.stale ? "Last usable data is stale" : null].filter(Boolean).join(" · ")));
+                card.append(heading);
+                const versions = document.createElement("p");
+                versions.textContent = latest ? [
+                    latest.applicationVersion && "Version " + latest.applicationVersion,
+                    latest.apiVersion && "API " + latest.apiVersion,
+                    "Access: " + pipelineLabel(latest.access), "Health: " + pipelineLabel(latest.health),
+                    "Observed " + formatDate(latest.observedAt),
+                    service.lastUsable && "Last usable " + formatDate(service.lastUsable.observedAt),
+                    service.lastUsable?.applicationVersion && "Last usable version " + service.lastUsable.applicationVersion,
+                    service.firstFailureAt && "First failure " + formatDate(service.firstFailureAt),
+                    service.nextPollAt && "Next scheduled check " + formatDate(service.nextPollAt)
+                ].filter(Boolean).join(" · ") : "Waiting for the first observation.";
+                card.append(versions);
+                if (latest?.diagnosticCode) {
+                    const diagnostic = document.createElement("p");
+                    diagnostic.textContent = pipelineDiagnostics[latest.diagnosticCode] || pipelineLabel(latest.diagnosticCode);
+                    card.append(diagnostic);
+                }
+                const addCapabilities = observation => {
+                    const list = document.createElement("ul");
+                    list.className = "rad-data";
+                    for (const capability of observation.capabilities || []) {
+                        const item = document.createElement("li");
+                        const details = [pipelineLabel(capability.status)];
+                        if (capability.diagnosticCode) details.push(pipelineDiagnostics[capability.diagnosticCode] || pipelineLabel(capability.diagnosticCode));
+                        for (const metric of capability.metrics || []) {
+                            if (Number.isFinite(metric.value)) details.push(pipelineLabel(metric.name) + ": " + metric.value.toLocaleString(undefined, { maximumFractionDigits: 2 }));
+                        }
+                        item.append(row(pipelineLabel(capability.key), details.join(" · ")));
+                        list.append(item);
+                    }
+                    card.append(list);
+                };
+                if (latest) addCapabilities(latest);
+                if (service.stale && service.lastUsable && service.lastUsable.observedAt !== latest?.observedAt) {
+                    const previous = document.createElement("p");
+                    previous.textContent = "Last usable observation · " + formatDate(service.lastUsable.observedAt);
+                    card.append(previous);
+                    addCapabilities(service.lastUsable);
+                }
+                const refresh = document.createElement("button");
+                refresh.type = "button";
+                refresh.textContent = "Refresh and retest";
+                refresh.addEventListener("click", () => runPipeline("pipeline-summary", async () => {
+                    status("pipeline-summary", "Checking " + (serviceNames[service.id] || service.id) + "…");
+                    renderPipeline(await testPipeline(service.id));
+                }));
+                card.append(refresh);
+                content.append(card);
+            }
+            output.replaceChildren(content);
+        }
+
+        async function loadPipeline() {
+            renderPipeline(await read(pipelinePath + "Status", undefined, 256 * 1024));
+        }
+
+        function testPipeline(id) {
+            return read(pipelinePath + encodeURIComponent(id) + "/Refresh", undefined, 256 * 1024, undefined, "POST", 70_000);
+        }
+
+        function renderPipelineService() {
+            const current = pipelineConfig?.integrations.find(service => service.id === field("pipeline-service").value);
+            if (!current) return;
+            resetPipelineSecrets();
+            field("pipeline-auth").replaceChildren(...current.authenticationModes.map(value => {
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = pipelineLabel(value);
+                return option;
+            }));
+            field("pipeline-auth").value = current.authentication;
+            field("pipeline-user-field").hidden = !["Basic", "Session"].includes(current.authentication);
+            field("pipeline-url").value = current.baseUrl || "";
+            field("pipeline-service-enabled").checked = current.enabled;
+            field("pipeline-interval").value = current.pollSeconds;
+            field("pipeline-timeout").value = current.timeoutSeconds;
+            field("pipeline-test-saved").disabled = !pipelineConfig.enabled || !current.enabled;
+            status("pipeline-credential-status", current.credentialConfigured
+                ? "Saved. Leave blank to retain it. Disable service polling before removing credentials."
+                : "No saved credentials.");
+        }
+
+        function renderPipelineSettings(result, selected) {
+            pipelineConfig = result;
+            field("pipeline-enabled").checked = result.enabled;
+            pipelineTab.hidden = !result.enabled;
+            const menu = field("pipeline-service");
+            menu.replaceChildren(...result.integrations.map(service => {
+                const option = document.createElement("option");
+                option.value = service.id;
+                option.textContent = service.name;
+                return option;
+            }));
+            if (result.integrations.some(service => service.id === selected)) menu.value = selected;
+            field("pipeline-config").hidden = false;
+            renderPipelineService();
+        }
+
+        async function loadPipelineSettings() {
+            renderPipelineSettings(await read(pipelinePath + "Settings", undefined, 24 * 1024), field("pipeline-service").value);
+            status("pipeline-config-status", "Configuration loaded.");
+        }
+
+        field("pipeline-config-load").addEventListener("click", () => runPipeline("pipeline-config-status", loadPipelineSettings));
+        field("pipeline-reload").addEventListener("click", () => runPipeline("pipeline-summary", loadPipeline));
+        field("pipeline-settings").addEventListener("click", () => {
+            selectTab(tabs.find(tab => tab.dataset.radTab === "settings"), true);
+            void runPipeline("pipeline-config-status", loadPipelineSettings);
+        });
+        field("pipeline-service").addEventListener("change", renderPipelineService);
+        field("pipeline-auth").addEventListener("change", () => {
+            field("pipeline-user-field").hidden = !["Basic", "Session"].includes(field("pipeline-auth").value);
+            field("pipeline-username").value = "";
+        });
+        field("pipeline-enable-form").addEventListener("submit", event => {
+            event.preventDefault();
+            void runPipeline("pipeline-config-status", async () => {
+                const settings = await read(pipelinePath + "Settings", undefined, 24 * 1024, { enabled: field("pipeline-enabled").checked });
+                renderPipelineSettings(settings, field("pipeline-service").value);
+                status("pipeline-config-status", settings.enabled ? "Media Management enabled." : "Media Management disabled.");
+            });
+        });
+        field("pipeline-service-form").addEventListener("submit", event => {
+            event.preventDefault();
+            void runPipeline("pipeline-config-status", async () => {
+                const id = field("pipeline-service").value;
+                const username = field("pipeline-username").value;
+                const credential = field("pipeline-secret").value;
+                const clearCredential = field("pipeline-remove").checked;
+                if (clearCredential && field("pipeline-service-enabled").checked) {
+                    status("pipeline-config-status", "Turn off polling for this service before removing credentials.");
+                    return;
+                }
+                resetPipelineSecrets();
+                const payload = {
+                    enabled: field("pipeline-service-enabled").checked,
+                    baseUrl: field("pipeline-url").value || null,
+                    authentication: field("pipeline-auth").value,
+                    username: username || null, credential: credential || null, clearCredential,
+                    pollSeconds: Number(field("pipeline-interval").value), timeoutSeconds: Number(field("pipeline-timeout").value)
+                };
+                renderPipelineSettings(await read(pipelinePath + "Settings/" + encodeURIComponent(id), undefined, 24 * 1024, payload), id);
+                status("pipeline-config-status", "Service configuration saved.");
+            });
+        });
+        field("pipeline-test-saved").addEventListener("click", () => runPipeline("pipeline-config-status", async () => {
+            const id = field("pipeline-service").value;
+            status("pipeline-config-status", "Testing the saved connection…");
+            const view = await testPipeline(id);
+            const latest = view.services.find(service => service.id === id)?.latest;
+            status("pipeline-config-status", latest ? [pipelineLabel(latest.connectivity), pipelineLabel(latest.access),
+                pipelineLabel(latest.compatibility), pipelineDiagnostics[latest.diagnosticCode]].filter(Boolean).join(" · ") : "No observation returned.");
+        }));
+
         async function activate() {
             pageRequest?.abort();
             clearInterval(playbackTimer);
@@ -1769,6 +2053,10 @@ const DeskAnalysis = (() => {
             field("server").hidden = true;
             field("usage-users").hidden = true;
             field("usage-popular").hidden = true;
+            pipelineTab.hidden = true;
+            pipelineConfig = null;
+            resetPipelineSecrets();
+            field("pipeline-config").hidden = true;
             selectTab(tabs[0]);
             field("export").value = "";
             for (const name of ["active-total", "transcode-total", "task-total", "space-total"]) status(name, "—");
@@ -1826,6 +2114,7 @@ const DeskAnalysis = (() => {
                     }
                 } catch { /* collection works without browser storage */ }
                 if (current.signal.aborted) return;
+                pipelineTab.hidden = access.mediaManagementEnabled !== true;
                 field("panels").hidden = false;
                 field("refresh").hidden = false;
                 field("snapshot").hidden = false;
@@ -1897,6 +2186,10 @@ const DeskAnalysis = (() => {
             playbackTimer = chartTimer = null;
             savedSettings = null;
             forgetSettings();
+            pipelineConfig = null;
+            resetPipelineSecrets();
+            field("pipeline-services").replaceChildren();
+            field("pipeline-config").hidden = true;
             field("settings-form").hidden = true;
             field("panels").hidden = true;
             status("excerpt", "");

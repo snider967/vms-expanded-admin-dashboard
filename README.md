@@ -12,6 +12,13 @@ In **Overview → Playback troubleshooting**, **Check recent transcodes** summar
 
 **0.7.0.0** adds the daily Discord health digest, actionable diagnostic alerts, and administrator incident history. **0.6.2.0** introduced complete event history across the Overview ranges and a separate storage range selector. See [GitHub Releases](https://github.com/snider967/vms-expanded-admin-dashboard/releases) for packages.
 
+## Media Management in v0.8.0.0
+
+Open **Settings → Media Management** to opt in to read-only monitoring. Enable only the services you want to monitor. Each service has its own URL prefix, credentials, polling interval and request timeout. Remote public endpoints require HTTPS. The **Media Management** tab shows cached observations and their freshness, and **Test saved connection** performs an explicit read-only retest.
+
+Existing diagnostic and notification settings continue to use their established configuration. A pre-existing Sonarr or Radarr connection is separate from the optional pipeline settings.
+
+
 ## Build and use in staging
 
 With a .NET 10 SDK, Python 3 and NuGet access, run from this directory:

@@ -12,7 +12,7 @@ namespace Jellyfin.Plugin.RemoteAdminDesk;
 [Authorize(Policy = "RequiresElevation")]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 [Route("RemoteAdminDesk")]
-public sealed class DiagnosticsController(ILibraryManager library, IApplicationPaths paths) : ControllerBase
+public sealed partial class DiagnosticsController(ILibraryManager library, IApplicationPaths paths) : ControllerBase
 {
     private static readonly JsonSerializerOptions WireFormat = new(JsonSerializerDefaults.Web);
     private static readonly string? JellyfinVersion = typeof(DiagnosticsController).Assembly
@@ -24,7 +24,7 @@ public sealed class DiagnosticsController(ILibraryManager library, IApplicationP
     public IActionResult Access()
     {
         if (!IsAccountAdministrator()) return Forbid();
-        return new JsonResult(new { jellyfinVersion = JellyfinVersion }, WireFormat);
+        return new JsonResult(new { jellyfinVersion = JellyfinVersion, mediaManagementEnabled = MediaPoller?.IsEnabled == true }, WireFormat);
     }
 
     [HttpGet("Storage")]

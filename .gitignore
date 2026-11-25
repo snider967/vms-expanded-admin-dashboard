@@ -6,3 +6,8 @@ __pycache__/
 .env
 .env.*
 vault/
+
+# Private Markdown vault and local agent instructions. Never publish.
+/Jellyfin Work/
+.obsidian/
+/AGENTS.md

@@ -116,6 +116,16 @@ try
         "A successfully collected empty window should have no events.");
     Console.WriteLine("Scheduled Trends collection, UTC ranges, repeat refresh and persisted state passed.");
     HealthIncidentTests.Run(paths, statePath);
+    await MediaManagementTests.Run(paths, library);
+    OperationalStoreTests.Run();
+    await SonarrAdapterTests.Run();
+    await RadarrAdapterTests.Run();
+    await BazarrAdapterTests.Run();
+    await ProwlarrAdapterTests.Run();
+    await SeerrAdapterTests.Run();
+    await QBittorrentAdapterTests.Run();
+    await GluetunAdapterTests.Run();
+    await MediaPollingTests.Run();
     await HealthDeliveryTests.Run(paths, CreateStub<MediaBrowser.Model.Tasks.ITaskManager>((method, _) =>
         method.Name == "get_ScheduledTasks" ? Array.Empty<MediaBrowser.Model.Tasks.IScheduledTaskWorker>()
             : throw new NotSupportedException(method.Name)));

@@ -1,3 +1,5 @@
+using Jellyfin.Plugin.RemoteAdminDesk.MediaManagement;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
@@ -13,6 +15,8 @@ public sealed class DeskRoutes : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection services, IServerApplicationHost applicationHost)
     {
         services.Configure<MvcOptions>(options => options.Conventions.Add(new PreferNewestController()));
+        services.AddSingleton(provider => new MediaPolling(provider.GetRequiredService<IApplicationPaths>()));
+        services.AddHostedService(provider => provider.GetRequiredService<MediaPolling>());
         if (services.LastOrDefault(descriptor => descriptor.ServiceType == typeof(IPluginManager))
             ?.ImplementationInstance is IPluginManager manager && RetireOlderCopies(manager))
         {

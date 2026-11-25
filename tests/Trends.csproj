@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="../Jellyfin.Plugin.RemoteAdminDesk.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="[10.0.14]" />
     <PackageReference Include="Jellyfin.Controller" Version="[12.4.0]" />
     <PackageReference Include="Jellyfin.Model" Version="[12.4.0]" />
   </ItemGroup>
