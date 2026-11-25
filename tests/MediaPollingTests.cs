@@ -70,6 +70,63 @@ internal static class MediaPollingTests
         {
             temp.Delete(recursive: true);
         }
+        await RejectedCredentialsPauseScheduledPolling();
+    }
+
+    private static async Task RejectedCredentialsPauseScheduledPolling()
+    {
+        var temp = Directory.CreateTempSubdirectory("vms-polling-auth-");
+        try
+        {
+            var clock = new Clock();
+            var torrents = new FakeAdapter(IntegrationId.QBittorrent, clock) { Rejected = true };
+            var settings = new MediaManagementSettings(temp.FullName);
+            settings.SetIntegration("qbittorrent", true, "http://localhost:8080/", "session", "fixture-user", "fixture-wrong", false, 60, 1);
+            settings.SetEnabled(true);
+            using var polling = new MediaPolling(temp.FullName, [torrents], clock);
+            polling.LoadConfiguration();
+            await polling.PollDue(CancellationToken.None);
+            for (var hour = 0; hour < 6; hour++)
+            {
+                clock.Now = clock.Now.AddHours(1);
+                await polling.PollDue(CancellationToken.None);
+            }
+            var paused = polling.CachedView().Services.Single();
+            Check(torrents.Calls == 1 && paused.NextPollAt is null
+                && paused.Latest?.Access == AccessStatus.AuthenticationFailed,
+                "Rejected credentials were retried on schedule, which can trigger a service lockout.");
+
+            using (var afterRestart = new MediaPolling(temp.FullName, [torrents], clock))
+            {
+                afterRestart.LoadConfiguration();
+                clock.Now = clock.Now.AddHours(1);
+                await afterRestart.PollDue(CancellationToken.None);
+                Check(torrents.Calls == 1, "A restart resumed polling with rejected credentials.");
+            }
+
+            torrents.Rejected = false;
+            Check(await polling.Refresh(IntegrationId.QBittorrent, manual: true, CancellationToken.None) == RefreshOutcome.Completed
+                && torrents.Calls == 2, "A manual retest was blocked while scheduled polling was paused.");
+            clock.Now = clock.Now.AddMinutes(2);
+            await polling.PollDue(CancellationToken.None);
+            Check(torrents.Calls == 3 && polling.CachedView().Services.Single().NextPollAt is not null,
+                "A successful manual retest did not resume scheduled polling.");
+
+            torrents.Rejected = true;
+            clock.Now = clock.Now.AddMinutes(2);
+            await polling.PollDue(CancellationToken.None);
+            settings.SetIntegration("qbittorrent", true, "http://localhost:8080/", "session", "fixture-user", "fixture-fixed", false, 60, 1);
+            torrents.Rejected = false;
+            polling.ConfigurationChanged();
+            polling.LoadConfiguration();
+            await polling.PollDue(CancellationToken.None);
+            Check(torrents.Calls == 5, "Updated credentials did not resume scheduled polling.");
+            Console.WriteLine("Media polling pauses scheduled checks after rejected credentials and resumes after a retest or settings change.");
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
     }
 
     private static void Check(bool condition, string message)
@@ -89,6 +146,7 @@ internal static class MediaPollingTests
         internal int Calls { get; private set; }
         internal bool Outage { get; set; }
         internal bool Block { get; set; }
+        internal bool Rejected { get; set; }
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<IntegrationObservation> ObserveAsync(IntegrationConnection connection, CancellationToken cancellationToken)
@@ -99,6 +157,9 @@ internal static class MediaPollingTests
                 Entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, cancellationToken);
             }
+            if (Rejected)
+                return new(id, clock.GetUtcNow(), Connectivity.Reachable, AccessStatus.AuthenticationFailed, Compatibility.Unknown,
+                    ServiceHealth.Unknown, null, null, [], "authentication-failed");
             return Outage
                 ? new(id, clock.GetUtcNow(), Connectivity.RateLimited, AccessStatus.Unknown, Compatibility.Unknown,
                     ServiceHealth.Unknown, null, null, [], "rate-limited", TimeSpan.FromMinutes(6))

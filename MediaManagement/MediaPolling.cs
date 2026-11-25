@@ -91,7 +91,8 @@ internal sealed class MediaPolling : BackgroundService
                     || now - last.ObservedAt >= state.Target.Interval * 2);
                 return new ServiceView(IntegrationRegistry.Resolve(state.Target.Id.ToString()).Key,
                     state.Running ? "refreshing" : latest is null ? "pending" : "observed", stale,
-                    latest, last, state.Stored?.FirstFailureAt, state.DueAt == default ? null : state.DueAt);
+                    latest, last, state.Stored?.FirstFailureAt,
+                    state.DueAt == default || state.DueAt == Suspended ? null : state.DueAt);
             }).ToArray());
         }
     }
@@ -172,7 +173,7 @@ internal sealed class MediaPolling : BackgroundService
                     state.RateLimitUntil = existing.RateLimitUntil;
                     state.NextManualAt = existing.NextManualAt;
                     state.ConsecutiveFailures = existing.ConsecutiveFailures;
-                    var adjusted = state.Stored?.Latest.ObservedAt + target.Interval ?? default;
+                    var adjusted = state.Stored is { } stored ? NextScheduled(stored.Latest, target.Interval) : default;
                     state.DueAt = adjusted > state.RateLimitUntil ? adjusted : state.RateLimitUntil;
                 }
                 _states.Add(target.Id, state);
@@ -199,7 +200,7 @@ internal sealed class MediaPolling : BackgroundService
                 {
                     if (generation != _configurationLifetime || state.Running || state.Stored is not null) continue;
                     state.Stored = saved;
-                    state.DueAt = saved.Latest.ObservedAt + state.Target.Interval;
+                    state.DueAt = NextScheduled(saved.Latest, state.Target.Interval);
                     if (saved.Latest.RetryAfter is { } delay)
                     {
                         state.RateLimitUntil = saved.Latest.ObservedAt + LimitRetry(delay);
@@ -316,8 +317,19 @@ internal sealed class MediaPolling : BackgroundService
             state.RateLimitUntil = latest.ObservedAt + retry;
             if (retry > delays) delays = retry;
         }
-        state.DueAt = latest.ObservedAt + delays;
+        state.DueAt = CredentialsRejected(latest) ? Suspended : latest.ObservedAt + delays;
     }
+
+    // Rejected credentials will not recover on their own, and repeated logins can trigger service lockouts
+    // (qBittorrent bans an address after repeated failures by default). Pause scheduled polling until the
+    // connection settings change (new revision) or a manual test succeeds.
+    private static readonly DateTimeOffset Suspended = DateTimeOffset.MaxValue;
+
+    private static bool CredentialsRejected(IntegrationObservation observation) =>
+        observation.Access is AccessStatus.AuthenticationFailed or AccessStatus.AuthorizationFailed;
+
+    private static DateTimeOffset NextScheduled(IntegrationObservation latest, TimeSpan interval) =>
+        CredentialsRejected(latest) ? Suspended : latest.ObservedAt + interval;
 
     private IntegrationObservation Failure(IntegrationId id, Connectivity connectivity, string code) =>
         new(id, _clock.GetUtcNow(), connectivity, AccessStatus.Unknown, Compatibility.Unknown, ServiceHealth.Unknown,

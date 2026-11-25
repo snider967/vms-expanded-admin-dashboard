@@ -37,6 +37,14 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ steps.project.outputs.sdk }}
+      - name: Pin the project's SDK band
+        # The runner image also ships a newer SDK. Build with the target band, as the lab does.
+        run: |
+          band="${{ steps.project.outputs.sdk }}"
+          sdk=$(dotnet --list-sdks | awk -v b="${band%.x}." 'index($1, b) == 1 {print $1}' | sort -V | tail -1)
+          test -n "$sdk"
+          printf '{ "sdk": { "version": "%s", "rollForward": "disable" } }\n' "$sdk" > global.json
+          dotnet --version
       - name: Confirm empty package cache
         run: |
           mkdir -p "$NUGET_PACKAGES"

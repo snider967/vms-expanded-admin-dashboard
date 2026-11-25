@@ -1891,7 +1891,9 @@ const DeskAnalysis = (() => {
                     service.lastUsable && "Last usable " + formatDate(service.lastUsable.observedAt),
                     service.lastUsable?.applicationVersion && "Last usable version " + service.lastUsable.applicationVersion,
                     service.firstFailureAt && "First failure " + formatDate(service.firstFailureAt),
-                    service.nextPollAt && "Next scheduled check " + formatDate(service.nextPollAt)
+                    service.nextPollAt && "Next scheduled check " + formatDate(service.nextPollAt),
+                    !service.nextPollAt && ["authenticationFailed", "authorizationFailed"].includes(latest.access)
+                        && "Scheduled checks paused until the connection settings change or a manual test succeeds"
                 ].filter(Boolean).join(" · ") : "Waiting for the first observation.";
                 card.append(versions);
                 if (latest?.diagnosticCode) {
